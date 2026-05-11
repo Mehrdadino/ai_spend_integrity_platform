@@ -9,3 +9,5 @@ dist/
 *.egg-info/
 .coverage
 htmlcov/
+node_modules/
+frontend/dist/

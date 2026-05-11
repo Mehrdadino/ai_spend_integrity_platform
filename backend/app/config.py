@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     presigned_upload_expires_seconds: int = 3600
     max_upload_bytes: int = 50 * 1024 * 1024
 
+    # Comma-separated browser origins for CORS (step 1c upload UI). Empty = no CORS middleware.
+    cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -8,6 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Spend Integrity API", version="0.1.0", lifespan=lifespan)
+
+# Allow the Vite dev server to call the API (step 1c); tighten in production.
+_settings = get_settings()
+_cors = [o.strip() for o in _settings.cors_origins.split(",") if o.strip()]
+if _cors:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 app.include_router(api_v1_router, prefix="/api/v1")
 
 

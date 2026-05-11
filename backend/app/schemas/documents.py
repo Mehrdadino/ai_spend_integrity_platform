@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -35,3 +36,19 @@ class CompleteUploadResponse(BaseModel):
     sha256: str
     byte_size: int
     processing_status: str
+
+
+class DocumentDetailResponse(BaseModel):
+    """Single document row for the upload UI / future document detail page (step 1c)."""
+
+    document_id: UUID
+    organization_id: UUID
+    site_id: Optional[UUID] = None
+    bucket: str
+    object_key: str
+    sha256: Optional[str] = None
+    mime_type: str
+    byte_size: Optional[int] = None
+    source: str
+    processing_status: str
+    created_at: datetime
