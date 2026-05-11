@@ -1,0 +1,35 @@
+---
+description: Whenever you add or change code, add or update comments; then run basic Python checks.
+alwaysApply: true
+---
+
+# Comments on every add or change
+
+**Primary rule:** Whenever you **add new code** or **change existing code** in this repository (especially under `backend/app/`), you must **add or refresh comments** in the same edit so a reader can follow intent without guessing.
+
+That means:
+
+- **New or edited modules** — ensure an accurate **module docstring** at the top (what this file is for).
+- **New or edited classes / public functions** — add or update **docstrings** (behavior, important args, side effects on DB/S3/queues).
+- **New or edited non-obvious logic** — add or adjust **inline comments** for invariants, tenancy, error handling, and integration contracts (not line-by-line noise).
+
+If you only rename a variable or fix a typo, a short comment update is only needed when behavior or contracts changed.
+
+---
+
+## Validation after backend Python changes
+
+From `backend/` (with `.venv` if present):
+
+```bash
+cd backend && . .venv/bin/activate && python -m compileall -q app && python -c "from app.main import app"
+```
+
+If you changed Alembic or models, run `alembic upgrade head` against local Docker when practical. Fix failures before finishing the task.
+
+---
+
+## Reminders
+
+- **Tenancy:** Note `organization_id` / `X-Organization-Id` where data is scoped.
+- **Storage vs DB:** Postgres = metadata and pipeline state; object storage = file bytes—mention when both appear in one flow.

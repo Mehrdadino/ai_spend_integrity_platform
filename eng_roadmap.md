@@ -26,6 +26,90 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 **Product Phase 3+** (contract intelligence, multi-vendor) is future work; the primitives you build in Phase 1 (ingestion, normalization, comparison, explanation) stay the foundation.
 
+### 0.1 Phase 1 pillars → decoupled steps
+
+Each **product milestone** below is split into **independent engineering steps**. Goal: separate PRs/trackers, clear contracts (usually: `document_id` → pipeline status; `bill_id` / `site_id` + period for downstream), and parallel work where dependencies allow.
+
+**Shared contract (whole Phase 1):** object storage holds originals; Postgres holds metadata and derived rows; workers advance `processing_status` (or equivalent) so UIs and email paths do not care *how* extraction runs.
+
+---
+
+#### 1) Document ingestion
+
+| Step | What ships | Decoupling note |
+|------|------------|-----------------|
+| **1a — Object storage + `documents` registry** | Bucket(s), `documents` rows with `bucket`/`key`/`sha256`/`mime_type`/`byte_size`, org/site linkage. | No UI, no email; test with CLI/scripts. |
+| **1b — Presigned (or server) upload API** | Authenticated endpoint(s) returning upload target + creating `document` in `pending` state. | Callable from curl/Postman before any frontend. |
+| **1c — Upload UI** | File picker, upload progress, success/error, link to document detail or list. | Depends on **1b** only; styling can trail **1b** if API stable. |
+| **1d — “Document ready” → job enqueue** | On upload completion (and later on email completion), enqueue worker job with `document_id` + idempotency key. | Worker can be a **no-op** that flips status to `queued`/`received` until extraction exists. |
+| **1e — Inbound email webhook** | HTTP handler for provider (SendGrid/Mailgun/SES); verify signature; parse MIME. | Same persistence shape as **1a**; no comparison logic. |
+| **1f — Email → tenant + site resolution** | Map recipient address, token, or header to `organization_id` / optional `site_id`; reject unknown senders safely. | Can ship after **1e** stores “unresolved” rows if you need a spike first. |
+| **1g — Attachment selection + virus/size policy** | Which part becomes `document` (first PDF, largest attachment, etc.); limits and logging. | Keeps **1e** small; rules are config, not ML. |
+| **1h — Ingestion status UI** | List documents, show pipeline state, errors surfaced from worker/API. | Depends on stable status fields from **1d** onward; can be a thin page before full dashboard. |
+
+---
+
+#### 2) Structured normalization layer
+
+| Step | What ships | Decoupling note |
+|------|------------|-----------------|
+| **2a — `raw_extraction` persistence** | JSONB (+ `model_id` / `extraction_version` / timestamps); append or version per `document_id`. | No Pydantic yet; store LLM output as-is for debugging. |
+| **2b — Pydantic (or equivalent) validate + repair path** | Strict schema for “what we accept”; structured validation errors logged and surfaced. | Unit-testable without DB; swap models without changing DB shape. |
+| **2c — Canonical enums + unit normalization** | Pure functions: categories, units, demand vs energy, tax/fee tags → canonical codes. | No new tables required if you only emit a normalized JSON blob first. |
+| **2d — Relational write: `bills` + `bill_line_items`** | Transactional upsert from normalized structure; idempotent re-run on same document. | Comparison (**3**) reads from here, not from raw JSON. |
+| **2e — (Optional) Internal raw vs normalized viewer** | Admin-only page or API for support; speeds pilot iteration. | Not required for MVP demo if logs suffice. |
+
+---
+
+#### 3) Historical comparison engine
+
+| Step | What ships | Decoupling note |
+|------|------------|-----------------|
+| **3a — “Prior bill for site + period” queries** | Repository functions / SQL; define “period” and ordering rules. | No anomaly rows yet; used by tests and **3b**. |
+| **3b — Rule pack v1 (code-first)** | MoM deltas, new fee lines, simple thresholds; deterministic outputs + evidence structs. | Table-driven rules file is fine; no LLM. |
+| **3c — Site-to-site comparables** | Only where categories/units align; explicit “not comparable” outcomes. | Can ship after **3b** if you gate on schema flags. |
+| **3d — `anomalies` persistence** | Insert/update anomalies with pointers to `bill_line_item_id`s or metric keys; dedupe on `(site_id, type, period, fingerprint)`. | Explainability (**4**) reads these rows + stored metrics. |
+| **3e — Re-run / backfill job** | When a new bill lands, re-evaluate open windows (e.g. last N periods). | Isolated worker task; decouples from upload path latency. |
+
+---
+
+#### 4) Explainability layer
+
+| Step | What ships | Decoupling note |
+|------|------------|-----------------|
+| **4a — Metric snapshot on compare** | Persist the numbers used in rules next to each anomaly (or in JSONB evidence). | Makes explanations **grounded** without re-querying fragile joins. |
+| **4b — Copy generation from metrics** | Templates / string builders from **4a**; optional LLM “polish” behind a flag. | Ship **4b** with templates only first; LLM is optional. |
+| **4c — Confidence tiers** | Heuristics from completeness, variance, data age; stable enum for UI. | Independent module; golden-file tests. |
+| **4d — API: anomaly + explanation + confidence** | Single read model for dashboard/inbox. | Review UI (**5**) can mock this until **5** is built. |
+
+---
+
+#### 5) Lightweight review workflow
+
+| Step | What ships | Decoupling note |
+|------|------------|-----------------|
+| **5a — State machine + transition rules** | States: e.g. `open` / `approved` / `dismissed` / `flagged`; valid transitions only. | API-first; Postman/curl before UI. |
+| **5b — Audit log** | Append-only `anomaly_review_events` (who, when, from→to, note). | RLS/tenant filters later; schema early. |
+| **5c — Anomaly inbox API** | List/filter/sort by site, period, severity, status. | Powers UI; can return mock explanations until **4d** is live. |
+| **5d — Review UI (inbox + detail)** | Table + detail drawer; action buttons call **5a**. | Depends on **5c**; can ship read-only inbox before write actions. |
+| **5e — Annotations / notes** | Free-text or structured note on transition. | Small addition after **5a**–**5d** happy path. |
+
+---
+
+#### Cross-cutting: production readiness (still Phase 1)
+
+These are **not** a separate product pillar but parallel tracks that attach to the steps above:
+
+| Step | What ships |
+|------|------------|
+| **P1 — Auth + tenant context** | Org-scoped JWT/session; middleware injects `organization_id` for all handlers. |
+| **P2 — Retries + idempotency** | Worker retries with backoff; idempotent document hash / job keys. |
+| **P3 — Minimal RBAC** | e.g. org admin vs member; enforced on review transitions if needed. |
+| **P4 — Observability** | Structured logs, correlation id per `document_id`, basic metrics on job success/fail. |
+| **P5 — E2E smoke** | Scripted path: upload → normalized bill → anomaly → explain → review on a fixed PDF set. |
+
+**Suggested dependency order (logical, not calendar):** **1a→1b→1d** and **1e→1f→1g→1d** in parallel after **1a**; **1c** / **1h** track UI; **2a→2b→2c→2d** after first worker runs extraction; **3a→3b→3d** once **2d** exists for two+ periods; **4a→4b→4c→4d** after **3d**; **5a→5b→5c→5d→5e** can start as soon as **3d** has stable IDs, with UI polishing when **4d** exists.
+
 ---
 
 ## 1. Technology decisions
