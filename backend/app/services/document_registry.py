@@ -40,7 +40,7 @@ def register_document_bytes(
     body: bytes,
     mime_type: str,
     source: str = "upload",
-    processing_status: str = "pending",
+    processing_status: str = "queued",
 ) -> Document:
     """Hash ``body``, write to S3, insert ``Document``; rollback S3 if DB flush fails.
 

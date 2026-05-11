@@ -1,4 +1,4 @@
-"""Document upload HTTP API: presigned PUT, finalize, and read-back (steps 1b–1c).
+"""Document upload HTTP API: presigned PUT, finalize, read-back, and enqueue (1b–1d).
 
 All routes require ``X-Organization-Id`` matching an organization UUID.
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_organization
@@ -23,6 +23,7 @@ from app.schemas.documents import (
     PresignedUploadRequest,
     PresignedUploadResponse,
 )
+from app.services.document_pipeline_queue import enqueue_document_pipeline_safe
 from app.services.upload_sessions import (
     complete_presigned_upload,
     create_presigned_upload,
@@ -60,12 +61,15 @@ def post_presigned_upload(
 @router.post("/{document_id}/complete-upload", response_model=CompleteUploadResponse)
 def post_complete_upload(
     document_id: UUID,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     org: Organization = Depends(require_organization),
 ) -> CompleteUploadResponse:
     """After the client PUTs bytes to storage, finalize hash and size (server-side read)."""
     doc = complete_presigned_upload(db, organization_id=org.id, document_id=document_id)
     assert doc.sha256 is not None and doc.byte_size is not None
+    # Runs after ``get_db`` commits so the worker sees the final ``queued`` row.
+    background_tasks.add_task(enqueue_document_pipeline_safe, doc.id)
     return CompleteUploadResponse(
         document_id=doc.id,
         sha256=doc.sha256,

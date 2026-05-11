@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Comma-separated browser origins for CORS (step 1c upload UI). Empty = no CORS middleware.
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
 
+    # Redis for RQ (step 1d). Set empty to skip enqueue (document stays ``queued`` until you run worker).
+    redis_url: str = "redis://127.0.0.1:6379/0"
+
 
 @lru_cache
 def get_settings() -> Settings:

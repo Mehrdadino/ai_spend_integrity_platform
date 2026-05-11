@@ -68,8 +68,8 @@ class Document(Base):
     mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
     byte_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="upload")
-    # e.g. awaiting_object (presign), pending (ready for extraction worker — step 1d).
-    processing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    # awaiting_object → queued (bytes ready) → received (worker ack, step 1d) → … extraction later.
+    processing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

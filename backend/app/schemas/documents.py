@@ -30,7 +30,7 @@ class PresignedUploadResponse(BaseModel):
 
 
 class CompleteUploadResponse(BaseModel):
-    """Row is now ``pending`` and ready for downstream extraction (step 1d)."""
+    """Row is ``queued``; RQ worker moves it to ``received`` (step 1d) before extraction."""
 
     document_id: UUID
     sha256: str

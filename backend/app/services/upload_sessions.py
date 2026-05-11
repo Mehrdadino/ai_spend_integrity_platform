@@ -1,7 +1,7 @@
 """Presigned upload flow (step 1b): create DB row + URL, then finalize from S3.
 
-Status flow: ``awaiting_object`` (client must PUT) → ``pending`` (bytes + hash
-known, ready for extraction queue in step 1d). Duplicate content per org is
+Status flow: ``awaiting_object`` (client must PUT) → ``queued`` (bytes + hash
+known; RQ worker step 1d moves to ``received``). Duplicate content per org is
 blocked at finalize time via partial unique index on ``sha256``.
 """
 
@@ -23,7 +23,7 @@ from app.services.storage import generate_presigned_put_url, sha256_and_size_fro
 
 # Processing status strings (keep aligned with ``eng_roadmap`` / worker expectations).
 PROCESSING_AWAITING_OBJECT = "awaiting_object"
-PROCESSING_PENDING = "pending"
+PROCESSING_QUEUED = "queued"
 
 
 def create_presigned_upload(
@@ -84,7 +84,7 @@ def complete_presigned_upload(
     organization_id: uuid.UUID,
     document_id: uuid.UUID,
 ) -> Document:
-    """Read object from S3, compute hash/size, move row to ``pending``; 409 on duplicate hash."""
+    """Read object from S3, compute hash/size, move row to ``queued``; 409 on duplicate hash."""
     settings = get_settings()
     doc = get_document_for_organization(
         session, document_id=document_id, organization_id=organization_id
@@ -115,7 +115,7 @@ def complete_presigned_upload(
 
     doc.sha256 = sha256
     doc.byte_size = size
-    doc.processing_status = PROCESSING_PENDING
+    doc.processing_status = PROCESSING_QUEUED
     try:
         session.flush()
     except IntegrityError:

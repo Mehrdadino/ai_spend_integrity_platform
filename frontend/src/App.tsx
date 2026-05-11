@@ -1,7 +1,8 @@
 /**
  * Step 1c — Upload UI: presign → PUT to object storage (with progress) → complete.
  *
- * ``VITE_ORG_ID`` must be a real ``organizations.id`` (e.g. from ``register-document`` / DB).
+ * Upload stays disabled until **Organization ID** is filled (same as ``X-Organization-Id`` on the API).
+ * Prefill via ``VITE_ORG_ID`` in ``frontend/.env`` (a real ``organizations.id`` from the DB).
  */
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -31,9 +32,26 @@ export function App() {
   const [detail, setDetail] = useState<DocumentDetailResponse | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  const canSubmit = useMemo(() => {
-    return Boolean(file && orgId.trim().length > 0 && apiBase.trim().length > 0 && phase === "idle");
-  }, [file, orgId, apiBase, phase]);
+  // Allow another upload after success/error without forcing a re-pick of the same file in the picker.
+  const phaseAllowsSubmit = phase === "idle" || phase === "done" || phase === "error";
+
+  const submitBlockedReason = useMemo(() => {
+    if (!apiBase.trim()) {
+      return "Set API base URL.";
+    }
+    if (!orgId.trim()) {
+      return "Paste your Organization ID (UUID) under Connection — required by the API.";
+    }
+    if (!file) {
+      return "Choose a file.";
+    }
+    if (!phaseAllowsSubmit) {
+      return "Wait for the current step to finish.";
+    }
+    return null;
+  }, [apiBase, orgId, file, phaseAllowsSubmit]);
+
+  const canSubmit = submitBlockedReason === null;
 
   const runUpload = useCallback(async () => {
     if (!file || !orgId.trim()) {
@@ -134,10 +152,16 @@ export function App() {
           </p>
         ) : null}
         <div className="actions">
-          <button type="button" disabled={!canSubmit} onClick={() => void runUpload()}>
+          <button
+            type="button"
+            disabled={!canSubmit}
+            title={submitBlockedReason ?? undefined}
+            onClick={() => void runUpload()}
+          >
             Upload
           </button>
         </div>
+        {submitBlockedReason ? <p className="upload-hint">{submitBlockedReason}</p> : null}
         {phase !== "idle" && phase !== "error" ? (
           <div className="progress-wrap" aria-live="polite">
             <div

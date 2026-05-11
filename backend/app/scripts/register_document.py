@@ -19,6 +19,7 @@ from pathlib import Path
 from app.db.session import get_session_factory
 from app.repositories.organizations import ensure_organization
 from app.repositories.sites import ensure_site
+from app.services.document_pipeline_queue import enqueue_document_pipeline_safe
 from app.services.document_registry import DuplicateDocumentError, register_document_bytes
 from app.services.storage import ensure_documents_bucket_exists
 
@@ -71,9 +72,10 @@ def main() -> None:
             body=body,
             mime_type=args.mime,
             source="upload",
-            processing_status="pending",
         )
         session.commit()
+        # Same enqueue path as HTTP ``complete-upload`` (after durable commit).
+        enqueue_document_pipeline_safe(doc.id)
         print(f"document_id={doc.id}")
         print(f"s3://{doc.bucket}/{doc.object_key}")
         print(f"sha256={doc.sha256}")

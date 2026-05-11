@@ -103,6 +103,18 @@ code {
   margin-top: 1rem;
 }
 
+.upload-hint {
+  margin: 0.65rem 0 0;
+  font-size: 0.88rem;
+  color: #fbbf24;
+}
+
+@media (prefers-color-scheme: light) {
+  .upload-hint {
+    color: #b45309;
+  }
+}
+
 button {
   cursor: pointer;
   border: none;
