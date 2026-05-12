@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Redis for RQ (step 1d). Set empty to skip enqueue (document stays ``queued`` until you run worker).
     redis_url: str = "redis://127.0.0.1:6379/0"
 
+    # Recorded on ``document_raw_extractions.model_id`` until real LLM wiring (2a stub).
+    raw_extraction_stub_model_id: str = "stub-llm"
+
     # Inbound email webhook (1e–1g): optional Mailgun signature (HTTP webhook signing key).
     mailgun_webhook_signing_key: str = ""
     # If both set, inbound POST must send this header (SendGrid/mail routes “custom MIME headers”).

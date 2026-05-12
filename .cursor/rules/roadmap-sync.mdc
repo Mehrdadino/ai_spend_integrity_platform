@@ -1,0 +1,36 @@
+---
+description: After substantive product/engineering work, keep product and engineering roadmaps aligned with what shipped.
+alwaysApply: true
+---
+
+# Roadmap sync after changes
+
+When you **implement or materially change** product-facing behavior, APIs, data model, worker pipeline, ingestion, extraction, comparison, review, or dev stack conventions that the roadmaps track, **update the roadmaps in the same change** (same PR / same session) **if the “what’s built” story changed**.
+
+## Files to keep in sync
+
+| File | What to maintain |
+|------|-------------------|
+| [`product_roadmap.md`](product_roadmap.md) | **Implementation status** near the top: “Built so far”, “Still to build”, “Recommended next focus” — product-level language. Bump the section date when you edit it. |
+| [`eng_roadmap.md`](eng_roadmap.md) | **§0.0 Implementation status** (table + “Not started” + “Suggested resume here order”), and **§0.1** step rows when a numbered step (1a–5e, 2a, P1, etc.) ships or meaningfully changes. Bump **Last updated** when you edit §0.0 / §0.1. |
+
+Product = *what* and *why*; engineering = *what exists in repo* and *step IDs*. They should not contradict each other after your edit.
+
+## When an update is **required**
+
+- New or removed **user-visible** capability, **API route**, **DB table/column**, **worker stage**, **frontend flow**, or **dev script** that the roadmaps describe or imply.
+- A roadmap row said “not started” / “TBD” / “thin” and your work **closes that gap**.
+- **Milestone numbering** (1h, 2a, …) is now inaccurate.
+
+## When you may **skip** roadmap edits
+
+- Typo-only, comment-only, or **purely internal** refactors with **no** change to shipped behavior, contracts, or roadmap-tracked scope.
+- Dependency version bumps with **no** feature impact described in the roadmaps.
+
+If unsure, prefer a **one-line** roadmap tweak (e.g. “Last updated” + a single bullet) over leaving stale text.
+
+## Style
+
+- **Complete sentences**; avoid vague “updated stuff”.
+- Prefer **concrete** references: file paths, endpoint paths, migration IDs, step labels (`2b`, `1h`).
+- Do **not** expand roadmap scope into future design docs; only reflect **what changed** and **what is next** when it shifted.

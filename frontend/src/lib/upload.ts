@@ -1,5 +1,5 @@
 /**
- * Client for the presigned upload flow (step 1b API + step 1c UI).
+ * Client for document APIs: presigned upload (1b–1c), list + detail (1h, 2a).
  *
  * PUT goes **directly to MinIO/S3** (cross-origin); MinIO must allow the Vite
  * origin (`MINIO_API_CORS_ALLOW_ORIGIN` in docker-compose).
@@ -19,6 +19,7 @@ export interface CompleteUploadResponse {
   sha256: string;
   byte_size: number;
   processing_status: string;
+  processing_error?: string | null;
 }
 
 export interface DocumentDetailResponse {
@@ -32,7 +33,17 @@ export interface DocumentDetailResponse {
   byte_size: number | null;
   source: string;
   processing_status: string;
+  processing_error?: string | null;
   created_at: string;
+  latest_raw_extraction?: RawExtractionSnapshotResponse | null;
+}
+
+export interface RawExtractionSnapshotResponse {
+  extraction_id: string;
+  model_id: string | null;
+  extraction_version: string | null;
+  created_at: string;
+  raw_payload: Record<string, unknown>;
 }
 
 /** Row from ``GET /api/v1/documents`` (step 1h ingestion list). */
@@ -44,6 +55,7 @@ export interface DocumentListItemResponse {
   sha256: string | null;
   source: string;
   processing_status: string;
+  processing_error?: string | null;
   created_at: string;
 }
 

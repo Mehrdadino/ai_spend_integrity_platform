@@ -18,24 +18,27 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | Area | What exists today |
 |------|---------------------|
 | **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**). |
-| **Backend (`backend/`)** | FastAPI; Alembic **`001_initial_schema`**, **`002_presign`**, **`003_ingest_token`** (`organizations.ingest_email_token`). ORM tables live: **`organizations`**, **`users`**, **`sites`**, **`documents`**. *Not yet in DB:* `bills`, `bill_line_items`, `anomalies`, review audit tables from the §2.1 calendar blurb. |
+| **Backend (`backend/`)** | FastAPI; Alembic through **`004_raw_extraction`**: **`document_raw_extractions`** (JSONB + `model_id` / `extraction_version` / `created_at`); **`documents.processing_error`** (worker failure text). ORM: orgs, users, sites, documents, raw extractions. *Not yet:* `bills`, `bill_line_items`, `anomalies`, review audit. |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
-| **1b** | `GET /api/v1/documents` (list, step **1h**), `POST /api/v1/documents/presigned-upload`, `POST /api/v1/documents/{id}/complete-upload`, `GET /api/v1/documents/{id}`. Tenant = header **`X-Organization-Id`** (UUID); not real JWT/session auth (P1). |
-| **1c** | **`frontend/`** Vite + React + TypeScript: **Upload** + **Documents** tabs; file picker, progress, presign → PUT → complete; link to list after upload; dev CORS on API; MinIO **`MINIO_API_CORS_ALLOW_ORIGIN`** for browser PUT. |
-| **1d** | **Redis + RQ**: after durable upload / email ingest, **`enqueue_document_pipeline_safe`**. **`document-worker`** → **`process_document_pipeline`**: `queued` → **`received`** (no-op until extraction). Statuses in use include **`awaiting_object`**, **`queued`**, **`received`** (+ legacy **`pending`** accepted by worker). |
-| **1e–1g** | **`POST /api/v1/webhooks/inbound-email/{ingest_token}`**: multipart/MIME (SendGrid/Mailgun-style), PDF policy, size/count caps; org from token; optional **site** hint in `To` / envelope (`site.<uuid>`); optional Mailgun signature + static header gate (`Settings`). |
-| **1h** | **Ingestion list API + UI:** `GET /api/v1/documents?limit=` (newest first); frontend table shows `processing_status`, `source`, MIME, size, `created_at`. Worker/API **error text on rows** not wired yet (future small extension). |
-| **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`register-document`**; **`scripts/dev.sh`**, **`scripts/bootstrap-backend-venv.sh`**, **`scripts/test-inbound-email-local.sh`**; **`print_dev_ingest_webhook`**. |
+| **1b** | `GET /api/v1/documents` (list + `processing_error`), `POST …/presigned-upload`, `POST …/{id}/complete-upload`, `GET …/{id}` (includes **`latest_raw_extraction`** when present). Tenant = **`X-Organization-Id`**. |
+| **1c** | **`frontend/`** Upload + **Documents** tabs; list shows **Error** column; status styling for `extracted` / `failed`. |
+| **1d** | **Redis + RQ** + **`document-worker`**: `queued` → `received` → **stub raw extraction row** → **`extracted`**; on exception → **`failed`** + **`processing_error`**. |
+| **1e–1g** | Inbound email webhook (multipart PDF), org token, site hint, caps + optional Mailgun/header verification. |
+| **1h** | List + detail surface **`processing_error`**; GET detail embeds latest **2a** snapshot. |
+| **2a (stub)** | Worker persists append-only **`document_raw_extractions`** with deterministic JSON; real LLM + versioning policy TBD. |
+| **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`register-document`**; **`scripts/dev.sh`**, **`bootstrap-backend-venv.sh`**, **`test-inbound-email-local.sh`**; **`print_dev_ingest_webhook`**. |
 
 ### Not started (still Phase 1 product scope)
 
-- **§2–5 pillars:** extraction / normalization, comparison, explainability, review (no code paths yet).  
-- **Cross-cutting P1–P5** as separate deliverables: real auth, RBAC hardening, observability package, scripted E2E smoke through full loop.
+- **§2 (beyond 2a stub):** Pydantic validate/repair (**2b**), canonical enums (**2c**), relational `bills` / `bill_line_items` (**2d**).  
+- **§3–5:** comparison, explainability, review.  
+- **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
 
 ### Suggested “resume here” order
 
-1. **Core loop start:** **2a** (persist `raw_extraction` JSONB) once you run LLM (or stub) from the worker after **`received`**.  
-2. **Optional ingestion polish:** persist and display **pipeline errors** on `documents` for failed jobs (extends **1h**).
+1. **2b** — strict schema + validation errors for LLM output (unit-testable).  
+2. **2c–2d** — normalization functions + relational bill writes.  
+3. **§3** — comparison once **2d** exists for two+ periods.
 
 ---
 
@@ -76,7 +79,7 @@ Each **product milestone** below is split into **independent engineering steps**
 | **1e — Inbound email webhook** | HTTP handler for provider (SendGrid/Mailgun/SES); verify signature; parse MIME. | Same persistence shape as **1a**; no comparison logic. |
 | **1f — Email → tenant + site resolution** | Map recipient address, token, or header to `organization_id` / optional `site_id`; reject unknown senders safely. | Can ship after **1e** stores “unresolved” rows if you need a spike first. |
 | **1g — Attachment selection + virus/size policy** | Which part becomes `document` (first PDF, largest attachment, etc.); limits and logging. | Keeps **1e** small; rules are config, not ML. |
-| **1h — Ingestion status UI** | List documents, show pipeline state, errors surfaced from worker/API. | **Shipped (thin):** `GET /documents` + frontend table; worker error strings on rows still TBD. |
+| **1h — Ingestion status UI** | List documents, show pipeline state, errors surfaced from worker/API. | **Shipped:** `GET /documents` + UI + **`processing_error`**; **`failed`** status on worker exception. |
 
 ---
 
@@ -84,7 +87,7 @@ Each **product milestone** below is split into **independent engineering steps**
 
 | Step | What ships | Decoupling note |
 |------|------------|-----------------|
-| **2a — `raw_extraction` persistence** | JSONB (+ `model_id` / `extraction_version` / timestamps); append or version per `document_id`. | No Pydantic yet; store LLM output as-is for debugging. |
+| **2a — `raw_extraction` persistence** | JSONB (+ `model_id` / `extraction_version` / timestamps); append or version per `document_id`. | **Shipped (stub):** **`document_raw_extractions`** + worker stub → **`extracted`**; swap in real LLM JSON. No Pydantic yet. |
 | **2b — Pydantic (or equivalent) validate + repair path** | Strict schema for “what we accept”; structured validation errors logged and surfaced. | Unit-testable without DB; swap models without changing DB shape. |
 | **2c — Canonical enums + unit normalization** | Pure functions: categories, units, demand vs energy, tax/fee tags → canonical codes. | No new tables required if you only emit a normalized JSON blob first. |
 | **2d — Relational write: `bills` + `bill_line_items`** | Transactional upsert from normalized structure; idempotent re-run on same document. | Comparison (**3**) reads from here, not from raw JSON. |

@@ -1,1 +1,1 @@
-"""Background jobs (RQ workers). Step 1d: document-ready pipeline enqueue + no-op worker."""
+"""Background jobs (RQ workers). Document pipeline: queue → ``extracted`` / ``failed`` + 2a stub."""

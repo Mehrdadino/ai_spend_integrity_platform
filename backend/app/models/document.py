@@ -2,6 +2,10 @@
 
 ``sha256`` and ``byte_size`` may be null while a presigned upload is in flight;
 a partial unique index enforces dedupe only once ``sha256`` is known (per org).
+
+``processing_error`` is set when the worker marks ``failed``; cleared when a new
+``queued`` job is processed successfully. ``raw_extractions`` holds pillar **2a**
+JSONB blobs (append-only).
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
+    from app.models.document_raw_extraction import DocumentRawExtraction
     from app.models.organization import Organization
     from app.models.site import Site
 
@@ -20,6 +25,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     String,
+    Text,
     Uuid,
     func,
     text,
@@ -68,8 +74,10 @@ class Document(Base):
     mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
     byte_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="upload")
-    # awaiting_object → queued (bytes ready) → received (worker ack, step 1d) → … extraction later.
+    # awaiting_object → queued → received → extracted | failed (worker-driven).
     processing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    # Worker/API failure summary for ingestion list UI (cleared on successful retry).
+    processing_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -79,3 +87,8 @@ class Document(Base):
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="documents")
     site: Mapped[Optional[Site]] = relationship("Site", back_populates="documents")
+    raw_extractions: Mapped[list["DocumentRawExtraction"]] = relationship(
+        "DocumentRawExtraction",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )

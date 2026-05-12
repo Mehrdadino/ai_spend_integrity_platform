@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -30,16 +30,27 @@ class PresignedUploadResponse(BaseModel):
 
 
 class CompleteUploadResponse(BaseModel):
-    """Row is ``queued``; RQ worker moves it to ``received`` (step 1d) before extraction."""
+    """Row is ``queued``; worker advances through ``received`` / ``extracted`` (2a) or ``failed``."""
 
     document_id: UUID
     sha256: str
     byte_size: int
     processing_status: str
+    processing_error: Optional[str] = None
+
+
+class RawExtractionSnapshotResponse(BaseModel):
+    """Latest ``document_raw_extractions`` row for GET detail (debug / support)."""
+
+    extraction_id: UUID
+    model_id: Optional[str] = None
+    extraction_version: Optional[str] = None
+    created_at: datetime
+    raw_payload: dict[str, Any]
 
 
 class DocumentDetailResponse(BaseModel):
-    """Single document row for the upload UI / future document detail page (step 1c)."""
+    """Single document row for the upload UI / detail (1c + 1h + 2a summary)."""
 
     document_id: UUID
     organization_id: UUID
@@ -51,11 +62,13 @@ class DocumentDetailResponse(BaseModel):
     byte_size: Optional[int] = None
     source: str
     processing_status: str
+    processing_error: Optional[str] = None
     created_at: datetime
+    latest_raw_extraction: Optional[RawExtractionSnapshotResponse] = None
 
 
 class DocumentListItemResponse(BaseModel):
-    """One row for ``GET /documents`` (step 1h): status-focused, no storage internals."""
+    """One row for ``GET /documents`` (step 1h): status + optional worker error."""
 
     document_id: UUID
     site_id: Optional[UUID] = None
@@ -64,4 +77,5 @@ class DocumentListItemResponse(BaseModel):
     sha256: Optional[str] = None
     source: str
     processing_status: str
+    processing_error: Optional[str] = None
     created_at: datetime

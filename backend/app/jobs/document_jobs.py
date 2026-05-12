@@ -1,8 +1,9 @@
-"""RQ job handlers for the document ingestion pipeline (step 1d onward).
+"""RQ job handlers for the document ingestion pipeline (1d → 2a).
 
-``process_document_pipeline`` is intentionally small: acknowledge bytes are
-stored and hand off to future extraction (step 2). Idempotent if the job is
-retried or duplicated.
+``process_document_pipeline`` acknowledges storage, persists a **stub** raw
+extraction row (JSONB), then sets ``extracted``. On any failure it sets
+``failed`` + ``processing_error`` so the ingestion list UI can show the reason.
+Idempotent for already-``extracted`` rows (no-op).
 """
 
 from __future__ import annotations
@@ -14,19 +15,28 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_session_factory
 from app.models.document import Document
+from app.services.raw_extraction import persist_stub_raw_extraction
 
 logger = logging.getLogger(__name__)
 
-# Rows created before 1d used ``pending``; new rows use ``queued`` after finalize.
 _STATUSES_READY_FOR_WORKER = frozenset({"queued", "pending"})
-
 PROCESSING_RECEIVED = "received"
+PROCESSING_EXTRACTED = "extracted"
+PROCESSING_FAILED = "failed"
+_MAX_ERROR_LEN = 8000
+
+
+def _truncate_error(message: str) -> str:
+    """Bound ``processing_error`` size (Postgres TEXT is still worth capping for UI)."""
+    if len(message) <= _MAX_ERROR_LEN:
+        return message
+    return message[: _MAX_ERROR_LEN - 24] + "…(error truncated)"
 
 
 def process_document_pipeline(document_id: str) -> None:
-    """Mark document as worker-acknowledged (``received``). Safe to retry.
+    """Run received → stub raw extraction (2a); persist ``failed`` + error on exception.
 
-    Opens its own DB session because RQ runs outside the FastAPI request scope.
+    Uses its own DB session because RQ runs outside the FastAPI request scope.
     """
     oid = uuid.UUID(document_id)
     factory = get_session_factory()
@@ -36,6 +46,9 @@ def process_document_pipeline(document_id: str) -> None:
         if doc is None:
             logger.warning("document_jobs: document not found id=%s", document_id)
             return
+        if doc.processing_status == PROCESSING_EXTRACTED:
+            logger.info("document_jobs: already extracted id=%s", document_id)
+            return
         if doc.processing_status not in _STATUSES_READY_FOR_WORKER:
             logger.info(
                 "document_jobs: skip id=%s status=%s",
@@ -43,11 +56,32 @@ def process_document_pipeline(document_id: str) -> None:
                 doc.processing_status,
             )
             return
-        doc.processing_status = PROCESSING_RECEIVED
-        session.commit()
-        logger.info("document_jobs: id=%s -> %s", document_id, PROCESSING_RECEIVED)
-    except Exception:
-        session.rollback()
-        raise
+
+        try:
+            doc.processing_error = None
+            doc.processing_status = PROCESSING_RECEIVED
+            session.flush()
+            persist_stub_raw_extraction(session, document=doc)
+            session.commit()
+            logger.info("document_jobs: id=%s -> %s", document_id, PROCESSING_EXTRACTED)
+        except Exception as exc:
+            session.rollback()
+            doc_failed = session.get(Document, oid)
+            if doc_failed is None:
+                logger.exception("document_jobs: document missing after failure id=%s", document_id)
+                return
+            doc_failed.processing_status = PROCESSING_FAILED
+            doc_failed.processing_error = _truncate_error(f"{type(exc).__name__}: {exc}")
+            try:
+                session.commit()
+                logger.warning(
+                    "document_jobs: id=%s -> %s err=%s",
+                    document_id,
+                    PROCESSING_FAILED,
+                    doc_failed.processing_error[:200],
+                )
+            except Exception:
+                session.rollback()
+                logger.exception("document_jobs: could not persist failure id=%s", document_id)
     finally:
         session.close()

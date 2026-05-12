@@ -1,5 +1,6 @@
 /**
- * Phase 1 ingestion UI: presigned upload (1c) + document list / pipeline status (1h).
+ * Phase 1 ingestion UI: presigned upload (1c) + document list with **processing_error**
+ * and status (1h), plus GET detail that includes **latest_raw_extraction** (2a stub).
  *
  * Upload stays disabled until **Organization ID** is filled (``X-Organization-Id``).
  * Prefill via ``VITE_ORG_ID`` in ``frontend/.env``.
@@ -32,6 +33,17 @@ function formatBytes(n: number | null): string {
     return `${(n / 1024).toFixed(1)} KiB`;
   }
   return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function statusPillClass(status: string): string {
+  const base = "status-pill";
+  if (status === "failed") {
+    return `${base} ${base}--failed`;
+  }
+  if (status === "extracted") {
+    return `${base} ${base}--extracted`;
+  }
+  return base;
 }
 
 export function App() {
@@ -248,7 +260,15 @@ export function App() {
                 <dt>Size</dt>
                 <dd>{result.byte_size} bytes</dd>
                 <dt>Status</dt>
-                <dd>{result.processing_status}</dd>
+                <dd>
+                  <span className={statusPillClass(result.processing_status)}>{result.processing_status}</span>
+                </dd>
+                {result.processing_error ? (
+                  <>
+                    <dt>Error</dt>
+                    <dd className="cell-error-inline">{result.processing_error}</dd>
+                  </>
+                ) : null}
               </dl>
               <div className="actions-row">
                 <button type="button" className="secondary" onClick={() => void loadDetail()}>
@@ -282,6 +302,7 @@ export function App() {
                   <tr>
                     <th>Created</th>
                     <th>Status</th>
+                    <th>Error</th>
                     <th>Source</th>
                     <th>MIME</th>
                     <th>Size</th>
@@ -293,7 +314,10 @@ export function App() {
                     <tr key={row.document_id}>
                       <td>{new Date(row.created_at).toLocaleString()}</td>
                       <td>
-                        <span className="status-pill">{row.processing_status}</span>
+                        <span className={statusPillClass(row.processing_status)}>{row.processing_status}</span>
+                      </td>
+                      <td className="cell-error" title={row.processing_error ?? undefined}>
+                        {row.processing_error ? row.processing_error : "—"}
                       </td>
                       <td>{row.source}</td>
                       <td className="cell-mono">{row.mime_type}</td>

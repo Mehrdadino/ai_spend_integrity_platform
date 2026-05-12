@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_organization
 from app.db.session import get_db
 from app.models.organization import Organization
+from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
 from app.repositories.documents import get_document_for_organization, list_documents_for_organization
 from app.schemas.documents import (
     CompleteUploadResponse,
@@ -24,6 +25,7 @@ from app.schemas.documents import (
     DocumentListItemResponse,
     PresignedUploadRequest,
     PresignedUploadResponse,
+    RawExtractionSnapshotResponse,
 )
 from app.services.document_pipeline_queue import enqueue_document_pipeline_safe
 from app.services.upload_sessions import (
@@ -51,6 +53,7 @@ def get_documents(
             sha256=doc.sha256,
             source=doc.source,
             processing_status=doc.processing_status,
+            processing_error=doc.processing_error,
             created_at=doc.created_at,
         )
         for doc in rows
@@ -100,6 +103,7 @@ def post_complete_upload(
         sha256=doc.sha256,
         byte_size=doc.byte_size,
         processing_status=doc.processing_status,
+        processing_error=doc.processing_error,
     )
 
 
@@ -115,6 +119,16 @@ def get_document(
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    latest = get_latest_raw_extraction_for_document(db, document_id=doc.id)
+    latest_snap: RawExtractionSnapshotResponse | None = None
+    if latest is not None:
+        latest_snap = RawExtractionSnapshotResponse(
+            extraction_id=latest.id,
+            model_id=latest.model_id,
+            extraction_version=latest.extraction_version,
+            created_at=latest.created_at,
+            raw_payload=dict(latest.raw_payload) if latest.raw_payload is not None else {},
+        )
     return DocumentDetailResponse(
         document_id=doc.id,
         organization_id=doc.organization_id,
@@ -126,5 +140,7 @@ def get_document(
         byte_size=doc.byte_size,
         source=doc.source,
         processing_status=doc.processing_status,
+        processing_error=doc.processing_error,
         created_at=doc.created_at,
+        latest_raw_extraction=latest_snap,
     )
