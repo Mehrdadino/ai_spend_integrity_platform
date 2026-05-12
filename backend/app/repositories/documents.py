@@ -24,3 +24,18 @@ def get_document_for_organization(
             Document.organization_id == organization_id,
         )
     )
+
+
+def get_document_by_organization_and_sha256(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    sha256: str,
+) -> Optional[Document]:
+    """Used after ``DuplicateDocumentError`` to return the existing row id (email idempotency)."""
+    return session.scalar(
+        select(Document).where(
+            Document.organization_id == organization_id,
+            Document.sha256 == sha256,
+        )
+    )

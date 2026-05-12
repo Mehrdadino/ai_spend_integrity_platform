@@ -7,6 +7,7 @@ dependencies = [
     "alembic>=1.14.0",
     "boto3>=1.35.0",
     "fastapi>=0.115.0",
+    "python-multipart>=0.0.9",
     "psycopg2-binary>=2.9.10",
     "pydantic-settings>=2.6.0",
     "redis>=5.0.0",
@@ -19,6 +20,7 @@ dependencies = [
 register-document = "app.scripts.register_document:main"
 document-worker = "app.scripts.run_rq_worker:main"
 seed-dev-org = "app.scripts.seed_dev_org:main"
+print-dev-ingest-webhook = "app.scripts.print_dev_ingest_webhook:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

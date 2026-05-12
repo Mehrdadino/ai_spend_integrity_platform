@@ -1,0 +1,108 @@
+---
+description: Local dev stack (scripts/dev.sh), migrations, and testing inbound-email ingestion (curl vs Gmail/Mailgun/ngrok).
+alwaysApply: false
+---
+
+# Local dev stack and inbound email testing
+
+## Where to run commands
+
+Use the **repository root** (directory containing `docker-compose.yml`, `backend/`, `frontend/`, `scripts/`), unless a command explicitly says `cd backend`.
+
+## Python on macOS (avoid `/usr/bin/python3` 3.9.x)
+
+Apple’s **`/usr/bin/python3`** is often **old (e.g. 3.9.6)**. Use a **project venv** at `backend/.venv`.
+
+### Recommended: one-command bootstrap with **uv** (fixes broken Homebrew `venv`)
+
+On recent macOS, **`brew`’s Python 3.12** sometimes fails during **`python3.12 -m venv`** with **`ensurepip`** / **`pyexpat`** errors (Homebrew’s `pyexpat` is linked against **`/usr/lib/libexpat.1.dylib`**, which can be too old for that build). **Do not fight it** — use **uv**, which downloads a standalone CPython that works.
+
+From **repo root**:
+
+```bash
+./scripts/bootstrap-backend-venv.sh
+```
+
+Then add **`~/.local/bin`** to your PATH (the installer prints this), or restart the terminal so **`uv`** stays available.
+
+In Cursor: **Python: Select Interpreter** → `backend/.venv/bin/python`.
+
+### Alternative: pure Homebrew (may fail on some OS versions)
+
+```bash
+brew install python@3.12
+cd backend
+"$(brew --prefix python@3.12)/bin/python3.12" -m venv .venv
+source .venv/bin/activate
+pip install -U pip setuptools wheel
+pip install -e .
+```
+
+If **`venv`** or **`pip`** fails with **`pyexpat`** / **`XML_SetAllocTrackerActivationThreshold`**, use **`./scripts/bootstrap-backend-venv.sh`** instead.
+
+**`./scripts/dev.sh`** and **`./scripts/test-inbound-email-local.sh`** use **`backend/.venv/bin/python`** when present; otherwise **`python3`**. Override with **`BACKEND_PYTHON=/path/to/python ./scripts/dev.sh`**.
+
+For Alembic and one-off scripts, activate the venv first, then **`python -m alembic`** / **`python -m app.scripts...`**.
+
+## One terminal: API + worker + Vite + Docker deps
+
+```bash
+cd /path/to/ai_spend_integrity_platform
+./scripts/dev.sh
+```
+
+- Starts **Postgres (15432)**, **MinIO**, **Redis**, **RQ document worker**, **Uvicorn** (`http://127.0.0.1:8000`), **Vite** (`http://127.0.0.1:5173`).
+- Waits for Postgres, runs **`seed-dev-org`**, then prints the **inbound-email webhook URL** for org slug `dev` (if DB + migrations are OK).
+- **Ctrl+C** stops API, worker, and Vite; **Docker containers keep running** (`docker compose down` to stop them).
+- **`SKIP_DOCUMENT_WORKER=1 ./scripts/dev.sh`** — skip the RQ worker if Redis/worker is not needed.
+
+When changing **Alembic/models**, from `backend/` with venv activated:
+
+```bash
+cd backend && source .venv/bin/activate && python -m alembic upgrade head
+```
+
+(`alembic` on PATH is optional; **`python -m alembic`** matches the venv used by `dev.sh`.)
+
+## Test inbound email **without** real email (fastest)
+
+With `./scripts/dev.sh` already running, **in a second shell** (or Cursor terminal) from repo root:
+
+```bash
+./scripts/test-inbound-email-local.sh "$HOME/Downloads/your-real-bill.pdf"
+```
+
+Use a path that exists on your machine (not a documentation placeholder).
+
+This POSTs a SendGrid-style `attachment1` to `http://127.0.0.1:8000/api/v1/webhooks/inbound-email/<token>`. Expect JSON with `results` and HTTP 200.
+
+Re-print URL/token anytime from `backend/` (venv activated):
+
+```bash
+cd backend && source .venv/bin/activate && python -m app.scripts.print_dev_ingest_webhook
+```
+
+## Why Gmail alone is not enough
+
+**Gmail cannot POST to your FastAPI app.** Inbound providers (e.g. **Mailgun**, **SendGrid Inbound Parse**) receive mail on their infrastructure, then **HTTP POST** `multipart/form-data` to your **public** URL.
+
+Localhost is not public, so use a tunnel (e.g. **ngrok**) in front of port **8000**.
+
+## Real email path (e.g. from rohani.mehr@gmail.com)
+
+High level:
+
+1. Keep **`./scripts/dev.sh`** running (API on 8000).
+2. Install/run **ngrok** (or similar): `ngrok http 8000` → copy the `https://…` URL.
+3. Create a **Mailgun** (or SendGrid Inbound Parse) account and a **receiving** route/domain that **POSTs** parsed MIME to:
+   `https://<ngrok-host>/api/v1/webhooks/inbound-email/<ingest_token>`
+   Use `<ingest_token>` from `print_dev_ingest_webhook` / dev.sh banner (DB column `organizations.ingest_email_token` for slug `dev`).
+4. **Mailgun sandbox** only delivers from/to **authorized recipients** — add your Gmail address as authorized, then send **from** that Gmail account **to** the Mailgun inbound address (e.g. `something@<your>.mailgun.org`). Check Mailgun logs if the POST fails.
+5. Optional security: set **`MAILGUN_WEBHOOK_SIGNING_KEY`** in `backend/.env` to the Mailgun **HTTP webhook signing key** so the API verifies `timestamp` / `token` / `signature`. If unset, Mailgun signature verification is skipped (dev convenience).
+6. Optional: **`INBOUND_EMAIL_WEBHOOK_HEADER_NAME`** + **`INBOUND_EMAIL_WEBHOOK_HEADER_VALUE`** if the provider can add a static secret header on the POST.
+
+Do **not** commit secrets; use `.env` locally.
+
+## Agent maintenance
+
+If you add new long-running dev processes (extra workers, tunnel helpers, etc.), update **`scripts/dev.sh`** and this rule so “one command” and email testing stay accurate. If the **backend venv** story changes, keep **`scripts/bootstrap-backend-venv.sh`** in sync.

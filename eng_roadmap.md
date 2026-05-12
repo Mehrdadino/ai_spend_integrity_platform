@@ -8,6 +8,36 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ---
 
+## 0.0 Implementation status (repository)
+
+**Last updated:** 2026-05-11  
+**Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
+
+### Shipped in this repo
+
+| Area | What exists today |
+|------|---------------------|
+| **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**). |
+| **Backend (`backend/`)** | FastAPI; Alembic **`001_initial_schema`**, **`002_presign`** (nullable `sha256` / `byte_size` during presign; partial unique on `(organization_id, sha256)` when hash set). ORM tables live: **`organizations`**, **`users`**, **`sites`**, **`documents`**. *Not yet in DB:* `bills`, `bill_line_items`, `anomalies`, review audit tables from the §2.1 calendar blurb. |
+| **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
+| **1b** | `POST /api/v1/documents/presigned-upload`, `POST /api/v1/documents/{id}/complete-upload`, `GET /api/v1/documents/{id}`. Tenant = header **`X-Organization-Id`** (UUID); not real JWT/session auth (P1). |
+| **1c** | **`frontend/`** Vite + React + TypeScript: file picker, XHR upload progress, presign → PUT → complete; dev CORS on API; MinIO **`MINIO_API_CORS_ALLOW_ORIGIN`** for browser PUT. |
+| **1d** | **Redis + RQ**: after durable upload, **`enqueue_document_pipeline_safe`** (HTTP BackgroundTasks + CLI after commit). Console **`document-worker`** → **`process_document_pipeline`**: `queued` → **`received`** (no-op until extraction). Statuses in use include **`awaiting_object`**, **`queued`**, **`received`** (+ legacy **`pending`** accepted by worker). |
+| **Dev helpers** | **`seed-dev-org`** (ensure `slug=dev`); **`document-worker`**; **`register-document`**. |
+
+### Not started (still Phase 1 product scope)
+
+- **1e–1h:** inbound email webhook, email→tenant/site, attachment policy, ingestion status list UI.  
+- **§2–5 pillars:** extraction / normalization, comparison, explainability, review (no code paths yet).  
+- **Cross-cutting P1–P5** as separate deliverables: real auth, RBAC hardening, observability package, scripted E2E smoke through full loop.
+
+### Suggested “resume here” order
+
+1. **Ingestion finish:** **1e** (email webhook) → **1f–1g** → **1h** (document list / status UI), *or*  
+2. **Core loop start:** **2a** (persist raw extraction) once you are ready to run LLM jobs from the worker after **`received`**.
+
+---
+
 ## 0. Alignment with `product_roadmap.md`
 
 | Product Phase 1 — “You SHOULD Build” | Engineering meaning (must be working at Phase 1 end) |

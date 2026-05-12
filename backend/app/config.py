@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # Redis for RQ (step 1d). Set empty to skip enqueue (document stays ``queued`` until you run worker).
     redis_url: str = "redis://127.0.0.1:6379/0"
 
+    # Inbound email webhook (1e–1g): optional Mailgun signature (HTTP webhook signing key).
+    mailgun_webhook_signing_key: str = ""
+    # If both set, inbound POST must send this header (SendGrid/mail routes “custom MIME headers”).
+    inbound_email_webhook_header_name: str = ""
+    inbound_email_webhook_header_value: str = ""
+    # Cap bill-like attachments processed from a single MIME message (abuse guard).
+    inbound_email_max_documents_per_request: int = 5
+
 
 @lru_cache
 def get_settings() -> Settings:

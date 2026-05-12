@@ -2,7 +2,7 @@
 
 Uses a stable UUID so ``frontend/.env`` can match after a fresh migrate.
 If ``slug=dev`` already exists (e.g. from ``register-document``), prints that row
-and does not overwrite.
+and ensures ``ingest_email_token`` is set for the inbound-email webhook (1e).
 
 Run from ``backend/``::
 
@@ -11,6 +11,7 @@ Run from ``backend/``::
 
 from __future__ import annotations
 
+import secrets
 import uuid
 
 from app.db.session import get_session_factory
@@ -32,12 +33,23 @@ def main() -> None:
         if existing is not None:
             print(f"Already exists: slug={DEV_SLUG} id={existing.id}")
             print(f"Use as VITE_ORG_ID / X-Organization-Id: {existing.id}")
+            if not existing.ingest_email_token:
+                existing.ingest_email_token = secrets.token_hex(16)
+                session.commit()
+                print("Generated ingest_email_token for POST /api/v1/webhooks/inbound-email/{token}")
+            print(f"Inbound email webhook path token: {existing.ingest_email_token}")
             return
-        org = Organization(id=DEV_ORGAN_ID, name=DEV_NAME, slug=DEV_SLUG)
+        org = Organization(
+            id=DEV_ORGAN_ID,
+            name=DEV_NAME,
+            slug=DEV_SLUG,
+            ingest_email_token=secrets.token_hex(16),
+        )
         session.add(org)
         session.commit()
         print(f"Created: slug={DEV_SLUG} id={DEV_ORGAN_ID}")
         print(f"Use as VITE_ORG_ID / X-Organization-Id: {DEV_ORGAN_ID}")
+        print(f"Inbound email webhook path token: {org.ingest_email_token}")
     except Exception:
         session.rollback()
         raise

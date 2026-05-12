@@ -17,6 +17,31 @@ Not perfect parsing.
 Just:
 
 “upload bills → get useful anomaly insights.”
+
+---
+
+## Implementation status (repository) — 2026-05-11
+
+**Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
+
+### Built so far (Phase 1 — ingestion / pipeline shell only)
+
+- **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO** (S3-compatible file storage), **Redis + RQ** for a first background job after upload, **Vite + React + TypeScript** upload UI under `frontend/`. Docker Compose runs Postgres, MinIO, and Redis locally.
+- **Document ingestion (partial):** browser or CLI can get a file into **object storage** + **Postgres** (`documents` with hash, size, MIME, processing status). **Presigned upload** flow + **upload UI** + **read-back** of a document by id. **Not yet:** email ingestion, ingestion list/status dashboard, end-to-end “processing status in UI” for all states beyond what the upload page shows.
+- **Background queue (first slice):** after a successful upload finalize, a job is enqueued; a **worker** marks the document as acknowledged (**`received`**) — placeholder until **extraction / normalization** (next major product blocks) run in the worker.
+- **Auth:** development-style **organization UUID header** only; not production multi-tenant auth.
+
+### Still to build for Phase 1 MVP (unchanged intent)
+
+Everything under **“You SHOULD Build”** below that is **not** listed in “Built so far”: **email forwarding**, **structured normalization**, **historical comparison**, **explainability**, **review workflow** — plus the “upload → anomaly insight” loop that depends on those layers.
+
+### Recommended next focus (product ↔ eng)
+
+- **Finish ingestion:** email path + tenant resolution + ingestion status UX (`eng_roadmap.md` §0.1 steps **1e–1h**), *or*  
+- **Start intelligence path:** persist LLM extraction and normalization (`eng_roadmap.md` pillar **2**) once documents are reliably queued for processing.
+
+---
+
 Product Scope
 
 Very narrow:
