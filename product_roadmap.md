@@ -20,7 +20,7 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-12
+## Implementation status (repository) — 2026-05-13
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
@@ -29,17 +29,17 @@ Just:
 - **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO** (S3-compatible file storage), **Redis + RQ** for a first background job after upload, **Vite + React + TypeScript** UI under `frontend/`. Docker Compose runs Postgres, MinIO, and Redis locally.
 - **Document ingestion:** browser, CLI, or **inbound email webhook** can get a file into **object storage** + **Postgres** (`documents` with hash, size, MIME, `source`, `processing_status`). **Presigned upload** + **upload UI** + **read-back** by id; **email** path via `POST /api/v1/webhooks/inbound-email/{token}` (tenant token on org, optional Mailgun signature / static header).
 - **Ingestion status (step 1h):** **`GET /api/v1/documents`** lists org documents (newest first); frontend **Documents** tab shows pipeline status, **`processing_error`** when the worker sets **`failed`**, source, MIME, size, and timestamps. GET detail includes the latest **raw extraction** snapshot when present.
-- **Background pipeline:** after upload finalize or email ingest, **RQ** runs **`process_document_pipeline`**: **`queued`** → **`received`** → append-only **`document_raw_extractions`** (stub JSON today, **2a**) → **`extracted`**; failures set **`failed`** + **`processing_error`**.
+- **Background pipeline:** after upload finalize or email ingest, **RQ** runs **`process_document_pipeline`**: **`queued`** → **`received`** → **Pydantic-validated** stub payload (**2b**) → append-only **`document_raw_extractions`** (**2a**) → **`extracted`**; failures (validation or other) set **`failed`** + **`processing_error`**.
 - **Auth:** development-style **organization UUID header** only; not production multi-tenant auth.
 
 ### Still to build for Phase 1 MVP (unchanged intent)
 
-Everything under **“You SHOULD Build”** below that is **not** covered above: **structured normalization** beyond raw JSON (**2b–2d**), **historical comparison**, **explainability**, **review workflow** — plus the “upload → anomaly insight” loop that depends on those layers.
+Everything under **“You SHOULD Build”** below that is **not** covered above: **structured normalization** beyond validated raw JSON (**2c–2d**), **historical comparison**, **explainability**, **review workflow** — plus the “upload → anomaly insight” loop that depends on those layers.
 
 ### Recommended next focus (product ↔ eng)
 
-- **Normalize and validate:** **`eng_roadmap.md`** step **2b** (Pydantic on LLM output) then **2c–2d** (canonical codes + `bills` / `bill_line_items`).  
-- **Wire a real extractor:** replace the worker **stub** payload in **`document_raw_extractions`** with frontier LLM output (same table shape).
+- **2c–2d:** canonical codes + relational **`bills` / `bill_line_items`** (see **`eng_roadmap.md`**).  
+- **Wire a real extractor:** add a new ``extraction_version`` + Pydantic model and call a frontier LLM before the same validate → insert path (still **no repair** unless product changes).
 
 ---
 

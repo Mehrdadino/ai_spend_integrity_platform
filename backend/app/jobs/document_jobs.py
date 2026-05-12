@@ -1,9 +1,9 @@
-"""RQ job handlers for the document ingestion pipeline (1d → 2a).
+"""RQ job handlers for the document ingestion pipeline (1d → 2a → 2b).
 
-``process_document_pipeline`` acknowledges storage, persists a **stub** raw
-extraction row (JSONB), then sets ``extracted``. On any failure it sets
-``failed`` + ``processing_error`` so the ingestion list UI can show the reason.
-Idempotent for already-``extracted`` rows (no-op).
+After storage ack, stub extraction JSON is **Pydantic-validated** (2b) before JSONB
+insert. Validation failures raise ``ExtractionPayloadValidationError``; the worker
+maps any exception to ``failed`` + ``processing_error`` (no repair). Idempotent for
+already-``extracted`` rows (no-op).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def _truncate_error(message: str) -> str:
 
 
 def process_document_pipeline(document_id: str) -> None:
-    """Run received → stub raw extraction (2a); persist ``failed`` + error on exception.
+    """Run received → validated stub raw extraction (2a/2b); persist ``failed`` + error on exception.
 
     Uses its own DB session because RQ runs outside the FastAPI request scope.
     """

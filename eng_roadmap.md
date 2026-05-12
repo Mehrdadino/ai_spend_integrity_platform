@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-12  
+**Last updated:** 2026-05-13  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -25,20 +25,20 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **1d** | **Redis + RQ** + **`document-worker`**: `queued` → `received` → **stub raw extraction row** → **`extracted`**; on exception → **`failed`** + **`processing_error`**. |
 | **1e–1g** | Inbound email webhook (multipart PDF), org token, site hint, caps + optional Mailgun/header verification. |
 | **1h** | List + detail surface **`processing_error`**; GET detail embeds latest **2a** snapshot. |
-| **2a (stub)** | Worker persists append-only **`document_raw_extractions`** with deterministic JSON; real LLM + versioning policy TBD. |
+| **2a (stub)** | Worker persists append-only **`document_raw_extractions`**; JSONB holds **Pydantic-validated** ``model_dump`` (``stub-v1``); real LLM TBD. |
+| **2b** | **Strict Pydantic** for ``stub-v1`` payloads (**``extra=forbid``**); mismatch / unknown version → ``ExtractionPayloadValidationError`` → worker ``failed`` (no repair). ``unittest`` in ``backend/tests/``. |
 | **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`register-document`**; **`scripts/dev.sh`**, **`bootstrap-backend-venv.sh`**, **`test-inbound-email-local.sh`**; **`print_dev_ingest_webhook`**. |
 
 ### Not started (still Phase 1 product scope)
 
-- **§2 (beyond 2a stub):** Pydantic validate/repair (**2b**), canonical enums (**2c**), relational `bills` / `bill_line_items` (**2d**).  
+- **§2 (beyond 2a–2b stub path):** canonical enums (**2c**), relational `bills` / `bill_line_items` (**2d**).  
 - **§3–5:** comparison, explainability, review.  
 - **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
 
 ### Suggested “resume here” order
 
-1. **2b** — strict schema + validation errors for LLM output (unit-testable).  
-2. **2c–2d** — normalization functions + relational bill writes.  
-3. **§3** — comparison once **2d** exists for two+ periods.
+1. **2c–2d** — normalization functions + relational bill writes (and register Pydantic for the first real LLM schema when wired).  
+2. **§3** — comparison once **2d** exists for two+ periods.
 
 ---
 
@@ -87,8 +87,8 @@ Each **product milestone** below is split into **independent engineering steps**
 
 | Step | What ships | Decoupling note |
 |------|------------|-----------------|
-| **2a — `raw_extraction` persistence** | JSONB (+ `model_id` / `extraction_version` / timestamps); append or version per `document_id`. | **Shipped (stub):** **`document_raw_extractions`** + worker stub → **`extracted`**; swap in real LLM JSON. No Pydantic yet. |
-| **2b — Pydantic (or equivalent) validate + repair path** | Strict schema for “what we accept”; structured validation errors logged and surfaced. | Unit-testable without DB; swap models without changing DB shape. |
+| **2a — `raw_extraction` persistence** | JSONB (+ `model_id` / `extraction_version` / timestamps); append or version per `document_id`. | **Shipped (stub):** **`document_raw_extractions`** + worker; payload is **validated** (2b) then stored as canonical JSON. |
+| **2b — Pydantic validate (no repair)** | Strict schema for “what we accept”; structured validation errors logged and surfaced. | **Shipped:** ``StubRawExtractionPayload`` + ``validate_raw_extraction_payload`` before JSONB insert; unknown ``extraction_version`` fails. Unit tests under ``backend/tests/``. |
 | **2c — Canonical enums + unit normalization** | Pure functions: categories, units, demand vs energy, tax/fee tags → canonical codes. | No new tables required if you only emit a normalized JSON blob first. |
 | **2d — Relational write: `bills` + `bill_line_items`** | Transactional upsert from normalized structure; idempotent re-run on same document. | Comparison (**3**) reads from here, not from raw JSON. |
 | **2e — (Optional) Internal raw vs normalized viewer** | Admin-only page or API for support; speeds pilot iteration. | Not required for MVP demo if logs suffice. |
