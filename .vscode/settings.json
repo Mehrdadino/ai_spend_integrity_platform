@@ -1,0 +1,7 @@
+{
+  // Monorepo layout: the installable Python package is `backend/app`. Without this,
+  // Pylance treats the repo root as the import root and flags every `from app...` as unresolved.
+  "python.analysis.extraPaths": ["${workspaceFolder}/backend"],
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+  "python.terminal.activateEnvInCurrentTerminal": true
+}
