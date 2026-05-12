@@ -30,6 +30,113 @@ body {
   max-width: 56rem;
 }
 
+/* Documents tab: list + viewer side-by-side on wide viewports. */
+.page--viewer {
+  max-width: 72rem;
+}
+
+.doc-layout {
+  display: grid;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (min-width: 960px) {
+  .doc-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.doc-layout-list {
+  margin-top: 1.25rem;
+}
+
+.doc-viewer-card {
+  margin-top: 1.25rem;
+}
+
+.doc-viewer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.doc-viewer-toolbar h2 {
+  margin: 0;
+}
+
+.doc-viewer-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.doc-preview-shell {
+  margin-bottom: 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: #0d1218;
+}
+
+.doc-preview-frame {
+  display: block;
+  width: 100%;
+  min-height: 70vh;
+  border: none;
+}
+
+.doc-preview-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.doc-preview-fallback {
+  margin: 0;
+  padding: 1rem;
+}
+
+.doc-viewer-kv {
+  margin-top: 0;
+}
+
+.doc-viewer-raw {
+  margin-top: 0.75rem;
+}
+
+.doc-viewer-raw summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.doc-table__row {
+  cursor: pointer;
+}
+
+.doc-table__row:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.doc-table__row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.doc-table__row--selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.doc-table-hint {
+  margin-top: 0.75rem;
+}
+
 .app-nav {
   display: flex;
   gap: 0.5rem;

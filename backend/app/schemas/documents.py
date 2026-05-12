@@ -49,6 +49,14 @@ class RawExtractionSnapshotResponse(BaseModel):
     raw_payload: dict[str, Any]
 
 
+class DocumentReadUrlResponse(BaseModel):
+    """Time-limited GET URL for the stored original (browser ``iframe`` / ``img``)."""
+
+    read_url: str
+    expires_in_seconds: int
+    mime_type: str
+
+
 class DocumentDetailResponse(BaseModel):
     """Single document row for the upload UI / detail (1c + 1h + 2a summary)."""
 
@@ -65,6 +73,13 @@ class DocumentDetailResponse(BaseModel):
     processing_error: Optional[str] = None
     created_at: datetime
     latest_raw_extraction: Optional[RawExtractionSnapshotResponse] = None
+
+
+class DocumentViewerResponse(DocumentDetailResponse):
+    """Detail plus presigned read URL so one round-trip can drive the viewer UI."""
+
+    read_url: str
+    read_url_expires_in_seconds: int
 
 
 class DocumentListItemResponse(BaseModel):

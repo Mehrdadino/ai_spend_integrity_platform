@@ -1,8 +1,10 @@
 /**
- * Client for document APIs: presigned upload (1b–1c), list + detail (1h, 2a).
+ * Client for document APIs: presigned upload (1b–1c), list + detail (1h, 2a),
+ * and presigned read URLs for in-browser preview (GET ``…/viewer`` / ``read-url``).
  *
  * PUT goes **directly to MinIO/S3** (cross-origin); MinIO must allow the Vite
- * origin (`MINIO_API_CORS_ALLOW_ORIGIN` in docker-compose).
+ * origin (`MINIO_API_CORS_ALLOW_ORIGIN` in docker-compose). Presigned GET
+ * URLs are also cross-origin when opened in ``iframe`` / ``img``.
  */
 export interface PresignedUploadResponse {
   document_id: string;
@@ -36,6 +38,12 @@ export interface DocumentDetailResponse {
   processing_error?: string | null;
   created_at: string;
   latest_raw_extraction?: RawExtractionSnapshotResponse | null;
+}
+
+/** Metadata plus a presigned GET for the stored object (single round-trip for the viewer UI). */
+export interface DocumentViewerResponse extends DocumentDetailResponse {
+  read_url: string;
+  read_url_expires_in_seconds: number;
 }
 
 export interface RawExtractionSnapshotResponse {
@@ -169,4 +177,20 @@ export async function fetchDocumentDetail(
     throw new Error(`Document fetch failed (${res.status}): ${body}`);
   }
   return res.json() as Promise<DocumentDetailResponse>;
+}
+
+/** Metadata + presigned read URL for preview (requires finalized upload / stored object). */
+export async function fetchDocumentViewer(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+): Promise<DocumentViewerResponse> {
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/viewer`, {
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Document viewer failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<DocumentViewerResponse>;
 }

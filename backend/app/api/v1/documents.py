@@ -2,9 +2,10 @@
 
 All routes require ``X-Organization-Id`` matching an organization UUID.
 
-Static paths (``presigned-upload``) are registered before ``/{document_id}`` so
-paths are not mistaken for UUIDs on other HTTP methods. The collection route
-``GET ""`` must stay before ``GET /{document_id}``.
+Static paths (``presigned-upload``) and sub-resources (``read-url``, ``viewer``)
+are registered before bare ``GET /{document_id}`` so path segments are not
+parsed as UUIDs where inappropriate. The collection route ``GET ""`` must stay
+before ``GET /{document_id}``.
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_organization
+from app.config import get_settings
 from app.db.session import get_db
+from app.models.document import Document
 from app.models.organization import Organization
 from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
 from app.repositories.documents import get_document_for_organization, list_documents_for_organization
@@ -23,17 +26,49 @@ from app.schemas.documents import (
     CompleteUploadResponse,
     DocumentDetailResponse,
     DocumentListItemResponse,
+    DocumentReadUrlResponse,
+    DocumentViewerResponse,
     PresignedUploadRequest,
     PresignedUploadResponse,
     RawExtractionSnapshotResponse,
 )
 from app.services.document_pipeline_queue import enqueue_document_pipeline_safe
+from app.services.document_read_urls import presigned_get_url_for_document
 from app.services.upload_sessions import (
     complete_presigned_upload,
     create_presigned_upload,
 )
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+def _document_detail_response(db: Session, doc: Document) -> DocumentDetailResponse:
+    """Map a ``Document`` ORM row + optional latest extraction to ``DocumentDetailResponse``."""
+    latest = get_latest_raw_extraction_for_document(db, document_id=doc.id)
+    latest_snap: RawExtractionSnapshotResponse | None = None
+    if latest is not None:
+        latest_snap = RawExtractionSnapshotResponse(
+            extraction_id=latest.id,
+            model_id=latest.model_id,
+            extraction_version=latest.extraction_version,
+            created_at=latest.created_at,
+            raw_payload=dict(latest.raw_payload) if latest.raw_payload is not None else {},
+        )
+    return DocumentDetailResponse(
+        document_id=doc.id,
+        organization_id=doc.organization_id,
+        site_id=doc.site_id,
+        bucket=doc.bucket,
+        object_key=doc.object_key,
+        sha256=doc.sha256,
+        mime_type=doc.mime_type,
+        byte_size=doc.byte_size,
+        source=doc.source,
+        processing_status=doc.processing_status,
+        processing_error=doc.processing_error,
+        created_at=doc.created_at,
+        latest_raw_extraction=latest_snap,
+    )
 
 
 @router.get("", response_model=list[DocumentListItemResponse])
@@ -107,6 +142,63 @@ def post_complete_upload(
     )
 
 
+@router.get("/{document_id}/read-url", response_model=DocumentReadUrlResponse)
+def get_document_read_url(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> DocumentReadUrlResponse:
+    """Presigned GET for the stored object; org-scoped; rejects unfinished uploads."""
+    doc = get_document_for_organization(
+        db, document_id=document_id, organization_id=org.id
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    settings = get_settings()
+    ttl = settings.presigned_read_expires_seconds
+    try:
+        url = presigned_get_url_for_document(doc, expires_in=ttl)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Document has no stored object yet (awaiting upload finalize)",
+        )
+    return DocumentReadUrlResponse(
+        read_url=url,
+        expires_in_seconds=ttl,
+        mime_type=doc.mime_type,
+    )
+
+
+@router.get("/{document_id}/viewer", response_model=DocumentViewerResponse)
+def get_document_viewer(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> DocumentViewerResponse:
+    """Single response for viewer UI: metadata + presigned file URL (same org scope)."""
+    doc = get_document_for_organization(
+        db, document_id=document_id, organization_id=org.id
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    detail = _document_detail_response(db, doc)
+    settings = get_settings()
+    ttl = settings.presigned_read_expires_seconds
+    try:
+        url = presigned_get_url_for_document(doc, expires_in=ttl)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Document has no stored object yet (awaiting upload finalize)",
+        )
+    return DocumentViewerResponse(
+        **detail.model_dump(),
+        read_url=url,
+        read_url_expires_in_seconds=ttl,
+    )
+
+
 @router.get("/{document_id}", response_model=DocumentDetailResponse)
 def get_document(
     document_id: UUID,
@@ -119,28 +211,4 @@ def get_document(
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    latest = get_latest_raw_extraction_for_document(db, document_id=doc.id)
-    latest_snap: RawExtractionSnapshotResponse | None = None
-    if latest is not None:
-        latest_snap = RawExtractionSnapshotResponse(
-            extraction_id=latest.id,
-            model_id=latest.model_id,
-            extraction_version=latest.extraction_version,
-            created_at=latest.created_at,
-            raw_payload=dict(latest.raw_payload) if latest.raw_payload is not None else {},
-        )
-    return DocumentDetailResponse(
-        document_id=doc.id,
-        organization_id=doc.organization_id,
-        site_id=doc.site_id,
-        bucket=doc.bucket,
-        object_key=doc.object_key,
-        sha256=doc.sha256,
-        mime_type=doc.mime_type,
-        byte_size=doc.byte_size,
-        source=doc.source,
-        processing_status=doc.processing_status,
-        processing_error=doc.processing_error,
-        created_at=doc.created_at,
-        latest_raw_extraction=latest_snap,
-    )
+    return _document_detail_response(db, doc)

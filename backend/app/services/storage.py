@@ -60,6 +60,30 @@ def delete_document_object(*, bucket: str, key: str) -> None:
     client.delete_object(Bucket=bucket, Key=key)
 
 
+def generate_presigned_get_url(
+    *,
+    bucket: str,
+    key: str,
+    expires_in: int,
+    response_content_type: str | None = None,
+) -> str:
+    """Return a time-limited URL for GET (browser ``iframe`` / ``img`` preview).
+
+    Optional ``response_content_type`` is signed into the URL so MinIO/S3 returns
+    the correct ``Content-Type`` for PDF rendering in embedded viewers.
+    """
+    client = get_s3_client()
+    params: dict[str, str] = {"Bucket": bucket, "Key": key}
+    if response_content_type:
+        params["ResponseContentType"] = response_content_type
+    return client.generate_presigned_url(
+        "get_object",
+        Params=params,
+        ExpiresIn=expires_in,
+        HttpMethod="GET",
+    )
+
+
 def generate_presigned_put_url(
     *,
     bucket: str,

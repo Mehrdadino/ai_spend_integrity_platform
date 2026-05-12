@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     # Presigned PUT: TTL and hard cap for abuse prevention (enforced again on complete).
     presigned_upload_expires_seconds: int = 3600
+    # Presigned GET: browser preview of stored originals (API still enforces org scope).
+    presigned_read_expires_seconds: int = 3600
     max_upload_bytes: int = 50 * 1024 * 1024
 
     # Comma-separated browser origins for CORS (step 1c upload UI). Empty = no CORS middleware.
