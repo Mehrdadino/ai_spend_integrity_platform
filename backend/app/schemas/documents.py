@@ -1,4 +1,4 @@
-"""Pydantic request/response models for document upload endpoints (OpenAPI schema)."""
+"""Pydantic request/response models for document HTTP endpoints (OpenAPI schema)."""
 
 from __future__ import annotations
 
@@ -49,6 +49,19 @@ class DocumentDetailResponse(BaseModel):
     sha256: Optional[str] = None
     mime_type: str
     byte_size: Optional[int] = None
+    source: str
+    processing_status: str
+    created_at: datetime
+
+
+class DocumentListItemResponse(BaseModel):
+    """One row for ``GET /documents`` (step 1h): status-focused, no storage internals."""
+
+    document_id: UUID
+    site_id: Optional[UUID] = None
+    mime_type: str
+    byte_size: Optional[int] = None
+    sha256: Optional[str] = None
     source: str
     processing_status: str
     created_at: datetime

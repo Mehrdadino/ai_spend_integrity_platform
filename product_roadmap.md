@@ -20,25 +20,26 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-11
+## Implementation status (repository) — 2026-05-12
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
-### Built so far (Phase 1 — ingestion / pipeline shell only)
+### Built so far (Phase 1 — ingestion shell + list UI)
 
-- **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO** (S3-compatible file storage), **Redis + RQ** for a first background job after upload, **Vite + React + TypeScript** upload UI under `frontend/`. Docker Compose runs Postgres, MinIO, and Redis locally.
-- **Document ingestion (partial):** browser or CLI can get a file into **object storage** + **Postgres** (`documents` with hash, size, MIME, processing status). **Presigned upload** flow + **upload UI** + **read-back** of a document by id. **Not yet:** email ingestion, ingestion list/status dashboard, end-to-end “processing status in UI” for all states beyond what the upload page shows.
-- **Background queue (first slice):** after a successful upload finalize, a job is enqueued; a **worker** marks the document as acknowledged (**`received`**) — placeholder until **extraction / normalization** (next major product blocks) run in the worker.
+- **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO** (S3-compatible file storage), **Redis + RQ** for a first background job after upload, **Vite + React + TypeScript** UI under `frontend/`. Docker Compose runs Postgres, MinIO, and Redis locally.
+- **Document ingestion:** browser, CLI, or **inbound email webhook** can get a file into **object storage** + **Postgres** (`documents` with hash, size, MIME, `source`, `processing_status`). **Presigned upload** + **upload UI** + **read-back** by id; **email** path via `POST /api/v1/webhooks/inbound-email/{token}` (tenant token on org, optional Mailgun signature / static header).
+- **Ingestion status (step 1h):** **`GET /api/v1/documents`** lists org documents (newest first); frontend **Documents** tab shows pipeline status, source, MIME, size, and timestamps.
+- **Background queue (first slice):** after upload finalize or email ingest, a job is enqueued; a **worker** marks the document as acknowledged (**`received`**) — placeholder until **extraction / normalization** run in the worker.
 - **Auth:** development-style **organization UUID header** only; not production multi-tenant auth.
 
 ### Still to build for Phase 1 MVP (unchanged intent)
 
-Everything under **“You SHOULD Build”** below that is **not** listed in “Built so far”: **email forwarding**, **structured normalization**, **historical comparison**, **explainability**, **review workflow** — plus the “upload → anomaly insight” loop that depends on those layers.
+Everything under **“You SHOULD Build”** below that is **not** covered above: **structured normalization**, **historical comparison**, **explainability**, **review workflow** — plus the “upload → anomaly insight” loop that depends on those layers. (Ingestion list is thin: no per-document error column from workers yet.)
 
 ### Recommended next focus (product ↔ eng)
 
-- **Finish ingestion:** email path + tenant resolution + ingestion status UX (`eng_roadmap.md` §0.1 steps **1e–1h**), *or*  
-- **Start intelligence path:** persist LLM extraction and normalization (`eng_roadmap.md` pillar **2**) once documents are reliably queued for processing.
+- **Start intelligence path:** persist LLM extraction (**`eng_roadmap.md`** pillar **2**, step **2a**) from the worker after **`received`**, *or*  
+- **Harden ingestion:** worker/API surfaced **errors** on `documents` and show them in the list UI (extends **1h**).
 
 ---
 

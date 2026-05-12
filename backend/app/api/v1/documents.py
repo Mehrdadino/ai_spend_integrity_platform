@@ -1,25 +1,27 @@
-"""Document upload HTTP API: presigned PUT, finalize, read-back, and enqueue (1b–1d).
+"""Document HTTP API: list (1h), presigned upload, finalize, read-back, enqueue (1b–1d).
 
 All routes require ``X-Organization-Id`` matching an organization UUID.
 
 Static paths (``presigned-upload``) are registered before ``/{document_id}`` so
-paths are not mistaken for UUIDs on other HTTP methods.
+paths are not mistaken for UUIDs on other HTTP methods. The collection route
+``GET ""`` must stay before ``GET /{document_id}``.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_organization
 from app.db.session import get_db
 from app.models.organization import Organization
-from app.repositories.documents import get_document_for_organization
+from app.repositories.documents import get_document_for_organization, list_documents_for_organization
 from app.schemas.documents import (
     CompleteUploadResponse,
     DocumentDetailResponse,
+    DocumentListItemResponse,
     PresignedUploadRequest,
     PresignedUploadResponse,
 )
@@ -30,6 +32,29 @@ from app.services.upload_sessions import (
 )
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+@router.get("", response_model=list[DocumentListItemResponse])
+def get_documents(
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+    limit: int = Query(100, ge=1, le=500, description="Max rows returned (newest first)"),
+) -> list[DocumentListItemResponse]:
+    """List documents for the tenant (step 1h): ingestion / pipeline status overview."""
+    rows = list_documents_for_organization(db, organization_id=org.id, limit=limit)
+    return [
+        DocumentListItemResponse(
+            document_id=doc.id,
+            site_id=doc.site_id,
+            mime_type=doc.mime_type,
+            byte_size=doc.byte_size,
+            sha256=doc.sha256,
+            source=doc.source,
+            processing_status=doc.processing_status,
+            created_at=doc.created_at,
+        )
+        for doc in rows
+    ]
 
 
 @router.post("/presigned-upload", response_model=PresignedUploadResponse)

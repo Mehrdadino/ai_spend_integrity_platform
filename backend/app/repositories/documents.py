@@ -1,4 +1,7 @@
-"""Document queries with mandatory organization scope (defense in depth)."""
+"""Document queries with mandatory organization scope (defense in depth).
+
+Includes org-scoped list for the ingestion status API (step 1h).
+"""
 
 from __future__ import annotations
 
@@ -9,6 +12,22 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.document import Document
+
+
+def list_documents_for_organization(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    limit: int = 100,
+) -> list[Document]:
+    """Newest-first ingestion list for step 1h (UI + API); ``limit`` capped by caller."""
+    stmt = (
+        select(Document)
+        .where(Document.organization_id == organization_id)
+        .order_by(Document.created_at.desc())
+        .limit(limit)
+    )
+    return list(session.scalars(stmt).all())
 
 
 def get_document_for_organization(

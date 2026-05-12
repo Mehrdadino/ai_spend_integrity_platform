@@ -35,6 +35,18 @@ export interface DocumentDetailResponse {
   created_at: string;
 }
 
+/** Row from ``GET /api/v1/documents`` (step 1h ingestion list). */
+export interface DocumentListItemResponse {
+  document_id: string;
+  site_id: string | null;
+  mime_type: string;
+  byte_size: number | null;
+  sha256: string | null;
+  source: string;
+  processing_status: string;
+  created_at: string;
+}
+
 function orgHeaders(orgId: string): HeadersInit {
   return {
     "Content-Type": "application/json",
@@ -112,6 +124,23 @@ export async function completeUpload(
     throw new Error(`Complete failed (${res.status}): ${body}`);
   }
   return res.json() as Promise<CompleteUploadResponse>;
+}
+
+/** List documents for the org (newest first); used by ingestion status UI (step 1h). */
+export async function fetchDocumentsList(
+  apiBase: string,
+  orgId: string,
+  limit = 100,
+): Promise<DocumentListItemResponse[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`${apiBase}/api/v1/documents?${params}`, {
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Documents list failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<DocumentListItemResponse[]>;
 }
 
 /** Fetch document metadata (same-org scoped) for the detail panel. */

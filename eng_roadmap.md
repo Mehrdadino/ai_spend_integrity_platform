@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-11  
+**Last updated:** 2026-05-12  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -18,23 +18,24 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | Area | What exists today |
 |------|---------------------|
 | **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**). |
-| **Backend (`backend/`)** | FastAPI; Alembic **`001_initial_schema`**, **`002_presign`** (nullable `sha256` / `byte_size` during presign; partial unique on `(organization_id, sha256)` when hash set). ORM tables live: **`organizations`**, **`users`**, **`sites`**, **`documents`**. *Not yet in DB:* `bills`, `bill_line_items`, `anomalies`, review audit tables from the §2.1 calendar blurb. |
+| **Backend (`backend/`)** | FastAPI; Alembic **`001_initial_schema`**, **`002_presign`**, **`003_ingest_token`** (`organizations.ingest_email_token`). ORM tables live: **`organizations`**, **`users`**, **`sites`**, **`documents`**. *Not yet in DB:* `bills`, `bill_line_items`, `anomalies`, review audit tables from the §2.1 calendar blurb. |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
-| **1b** | `POST /api/v1/documents/presigned-upload`, `POST /api/v1/documents/{id}/complete-upload`, `GET /api/v1/documents/{id}`. Tenant = header **`X-Organization-Id`** (UUID); not real JWT/session auth (P1). |
-| **1c** | **`frontend/`** Vite + React + TypeScript: file picker, XHR upload progress, presign → PUT → complete; dev CORS on API; MinIO **`MINIO_API_CORS_ALLOW_ORIGIN`** for browser PUT. |
-| **1d** | **Redis + RQ**: after durable upload, **`enqueue_document_pipeline_safe`** (HTTP BackgroundTasks + CLI after commit). Console **`document-worker`** → **`process_document_pipeline`**: `queued` → **`received`** (no-op until extraction). Statuses in use include **`awaiting_object`**, **`queued`**, **`received`** (+ legacy **`pending`** accepted by worker). |
-| **Dev helpers** | **`seed-dev-org`** (ensure `slug=dev`); **`document-worker`**; **`register-document`**. |
+| **1b** | `GET /api/v1/documents` (list, step **1h**), `POST /api/v1/documents/presigned-upload`, `POST /api/v1/documents/{id}/complete-upload`, `GET /api/v1/documents/{id}`. Tenant = header **`X-Organization-Id`** (UUID); not real JWT/session auth (P1). |
+| **1c** | **`frontend/`** Vite + React + TypeScript: **Upload** + **Documents** tabs; file picker, progress, presign → PUT → complete; link to list after upload; dev CORS on API; MinIO **`MINIO_API_CORS_ALLOW_ORIGIN`** for browser PUT. |
+| **1d** | **Redis + RQ**: after durable upload / email ingest, **`enqueue_document_pipeline_safe`**. **`document-worker`** → **`process_document_pipeline`**: `queued` → **`received`** (no-op until extraction). Statuses in use include **`awaiting_object`**, **`queued`**, **`received`** (+ legacy **`pending`** accepted by worker). |
+| **1e–1g** | **`POST /api/v1/webhooks/inbound-email/{ingest_token}`**: multipart/MIME (SendGrid/Mailgun-style), PDF policy, size/count caps; org from token; optional **site** hint in `To` / envelope (`site.<uuid>`); optional Mailgun signature + static header gate (`Settings`). |
+| **1h** | **Ingestion list API + UI:** `GET /api/v1/documents?limit=` (newest first); frontend table shows `processing_status`, `source`, MIME, size, `created_at`. Worker/API **error text on rows** not wired yet (future small extension). |
+| **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`register-document`**; **`scripts/dev.sh`**, **`scripts/bootstrap-backend-venv.sh`**, **`scripts/test-inbound-email-local.sh`**; **`print_dev_ingest_webhook`**. |
 
 ### Not started (still Phase 1 product scope)
 
-- **1e–1h:** inbound email webhook, email→tenant/site, attachment policy, ingestion status list UI.  
 - **§2–5 pillars:** extraction / normalization, comparison, explainability, review (no code paths yet).  
 - **Cross-cutting P1–P5** as separate deliverables: real auth, RBAC hardening, observability package, scripted E2E smoke through full loop.
 
 ### Suggested “resume here” order
 
-1. **Ingestion finish:** **1e** (email webhook) → **1f–1g** → **1h** (document list / status UI), *or*  
-2. **Core loop start:** **2a** (persist raw extraction) once you are ready to run LLM jobs from the worker after **`received`**.
+1. **Core loop start:** **2a** (persist `raw_extraction` JSONB) once you run LLM (or stub) from the worker after **`received`**.  
+2. **Optional ingestion polish:** persist and display **pipeline errors** on `documents` for failed jobs (extends **1h**).
 
 ---
 
@@ -70,12 +71,12 @@ Each **product milestone** below is split into **independent engineering steps**
 |------|------------|-----------------|
 | **1a — Object storage + `documents` registry** | Bucket(s), `documents` rows with `bucket`/`key`/`sha256`/`mime_type`/`byte_size`, org/site linkage. | No UI, no email; test with CLI/scripts. |
 | **1b — Presigned (or server) upload API** | Authenticated endpoint(s) returning upload target + creating `document` in `pending` state. | Callable from curl/Postman before any frontend. |
-| **1c — Upload UI** | File picker, upload progress, success/error, link to document detail or list. | Depends on **1b** only; styling can trail **1b** if API stable. |
+| **1c — Upload UI** | File picker, upload progress, success/error, link to document detail or list. | Depends on **1b** only; **Documents** tab lists pipeline status (step **1h**). |
 | **1d — “Document ready” → job enqueue** | On upload completion (and later on email completion), enqueue worker job with `document_id` + idempotency key. | Worker can be a **no-op** that flips status to `queued`/`received` until extraction exists. |
 | **1e — Inbound email webhook** | HTTP handler for provider (SendGrid/Mailgun/SES); verify signature; parse MIME. | Same persistence shape as **1a**; no comparison logic. |
 | **1f — Email → tenant + site resolution** | Map recipient address, token, or header to `organization_id` / optional `site_id`; reject unknown senders safely. | Can ship after **1e** stores “unresolved” rows if you need a spike first. |
 | **1g — Attachment selection + virus/size policy** | Which part becomes `document` (first PDF, largest attachment, etc.); limits and logging. | Keeps **1e** small; rules are config, not ML. |
-| **1h — Ingestion status UI** | List documents, show pipeline state, errors surfaced from worker/API. | Depends on stable status fields from **1d** onward; can be a thin page before full dashboard. |
+| **1h — Ingestion status UI** | List documents, show pipeline state, errors surfaced from worker/API. | **Shipped (thin):** `GET /documents` + frontend table; worker error strings on rows still TBD. |
 
 ---
 
