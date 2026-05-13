@@ -4,7 +4,7 @@
 **Canonical product phases:** [`product_roadmap.md`](product_roadmap.md)  
 **Stack anchor:** Python backend  
 
-This document is the engineering counterpart to the product vision. **Product Phase 1 (0–4 months) ends with a functional product:** the full loop **upload / email → extract → normalize → compare → explain → review** works in production for real utility bills—not a partial demo missing ingestion, comparison, or workflow.
+This document is the engineering counterpart to the product vision. **Product Phase 1 (0–4 months) ends with a functional product:** the full loop **upload → extract → normalize → compare → explain → review** works in production for real utility bills—not a partial demo missing ingestion, comparison, or workflow.
 
 ---
 
@@ -18,16 +18,15 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | Area | What exists today |
 |------|---------------------|
 | **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**). |
-| **Backend (`backend/`)** | FastAPI; Alembic through **`004_raw_extraction`**: **`document_raw_extractions`** (JSONB + `model_id` / `extraction_version` / `created_at`); **`documents.processing_error`** (worker failure text). ORM: orgs, users, sites, documents, raw extractions. *Not yet:* `bills`, `bill_line_items`, `anomalies`, review audit. |
+| **Backend (`backend/`)** | FastAPI; Alembic through **`005_drop_ingest_token`** (removes org ingest token); **`document_raw_extractions`** (JSONB + `model_id` / `extraction_version` / `created_at`); **`documents.processing_error`** (worker failure text). ORM: orgs, users, sites, documents, raw extractions. *Not yet:* `bills`, `bill_line_items`, `anomalies`, review audit. |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
-| **1b** | `GET /api/v1/documents` (list + `processing_error`), `POST …/presigned-upload`, `POST …/{id}/complete-upload`, `GET …/{id}` (includes **`latest_raw_extraction`** when present). Tenant = **`X-Organization-Id`**. |
+| **1b** | `GET /api/v1/documents` (list + `processing_error`), `POST …/presigned-upload`, `POST …/{id}/complete-upload`, `GET …/{id}`, `GET …/{id}/viewer` (detail + presigned read URL). Tenant = **`X-Organization-Id`**. |
 | **1c** | **`frontend/`** Upload + **Documents** tabs; list shows **Error** column; status styling for `extracted` / `failed`. |
 | **1d** | **Redis + RQ** + **`document-worker`**: `queued` → `received` → **stub raw extraction row** → **`extracted`**; on exception → **`failed`** + **`processing_error`**. |
-| **1e–1g** | Inbound email webhook (multipart PDF), org token, site hint, caps + optional Mailgun/header verification. |
 | **1h** | List + detail surface **`processing_error`**; GET detail embeds latest **2a** snapshot. |
 | **2a (stub)** | Worker persists append-only **`document_raw_extractions`**; JSONB holds **Pydantic-validated** ``model_dump`` (``stub-v1``); real LLM TBD. |
 | **2b** | **Strict Pydantic** for ``stub-v1`` payloads (**``extra=forbid``**); mismatch / unknown version → ``ExtractionPayloadValidationError`` → worker ``failed`` (no repair). ``unittest`` in ``backend/tests/``. |
-| **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`register-document`**; **`scripts/dev.sh`**, **`bootstrap-backend-venv.sh`**, **`test-inbound-email-local.sh`**; **`print_dev_ingest_webhook`**. |
+| **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`register-document`**; **`scripts/dev.sh`**, **`bootstrap-backend-venv.sh`**. |
 
 ### Not started (still Phase 1 product scope)
 
@@ -46,7 +45,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 | Product Phase 1 — “You SHOULD Build” | Engineering meaning (must be working at Phase 1 end) |
 |--------------------------------------|--------------------------------------------------------|
-| **1. Document ingestion** — upload UI, email forwarding, storage | Web upload + presigned/object pipeline; inbound email → same pipeline; originals in object storage; metadata in Postgres. |
+| **1. Document ingestion** — upload UI, storage | Web upload + presigned/object pipeline; originals in object storage; metadata in Postgres. |
 | **2. Structured normalization layer** | LLM output validated (e.g. Pydantic) → canonical schema, enums, units; `raw_extraction` (JSONB) + normalized tables. |
 | **3. Historical comparison engine** | Code-first (not LLM): MoM, site-to-site, fee categories, usage patterns; anomalies persisted with evidence pointers. |
 | **4. Explainability layer** | Grounded copy from computed metrics; plain-English summaries; confidence tiers. |
@@ -64,7 +63,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 Each **product milestone** below is split into **independent engineering steps**. Goal: separate PRs/trackers, clear contracts (usually: `document_id` → pipeline status; `bill_id` / `site_id` + period for downstream), and parallel work where dependencies allow.
 
-**Shared contract (whole Phase 1):** object storage holds originals; Postgres holds metadata and derived rows; workers advance `processing_status` (or equivalent) so UIs and email paths do not care *how* extraction runs.
+**Shared contract (whole Phase 1):** object storage holds originals; Postgres holds metadata and derived rows; workers advance `processing_status` (or equivalent) so UIs do not care *how* extraction runs.
 
 ---
 
@@ -72,13 +71,11 @@ Each **product milestone** below is split into **independent engineering steps**
 
 | Step | What ships | Decoupling note |
 |------|------------|-----------------|
-| **1a — Object storage + `documents` registry** | Bucket(s), `documents` rows with `bucket`/`key`/`sha256`/`mime_type`/`byte_size`, org/site linkage. | No UI, no email; test with CLI/scripts. |
+| **1a — Object storage + `documents` registry** | Bucket(s), `documents` rows with `bucket`/`key`/`sha256`/`mime_type`/`byte_size`, org/site linkage. | No UI; test with CLI/scripts. |
 | **1b — Presigned (or server) upload API** | Authenticated endpoint(s) returning upload target + creating `document` in `pending` state. | Callable from curl/Postman before any frontend. |
 | **1c — Upload UI** | File picker, upload progress, success/error, link to document detail or list. | Depends on **1b** only; **Documents** tab lists pipeline status (step **1h**). |
-| **1d — “Document ready” → job enqueue** | On upload completion (and later on email completion), enqueue worker job with `document_id` + idempotency key. | Worker can be a **no-op** that flips status to `queued`/`received` until extraction exists. |
-| **1e — Inbound email webhook** | HTTP handler for provider (SendGrid/Mailgun/SES); verify signature; parse MIME. | Same persistence shape as **1a**; no comparison logic. |
-| **1f — Email → tenant + site resolution** | Map recipient address, token, or header to `organization_id` / optional `site_id`; reject unknown senders safely. | Can ship after **1e** stores “unresolved” rows if you need a spike first. |
-| **1g — Attachment selection + virus/size policy** | Which part becomes `document` (first PDF, largest attachment, etc.); limits and logging. | Keeps **1e** small; rules are config, not ML. |
+| **1d — “Document ready” → job enqueue** | On upload completion, enqueue worker job with `document_id` + idempotency key. | Worker can be a **no-op** that flips status to `queued`/`received` until extraction exists. |
+| **1e–1g (deferred)** | Inbound email as an ingestion channel (webhook, tenant resolution, attachment policy). | **Not in this repository** (removed); Phase 1 uses presigned upload + CLI only. Revisit if product wants provider-forwarded mail again. |
 | **1h — Ingestion status UI** | List documents, show pipeline state, errors surfaced from worker/API. | **Shipped:** `GET /documents` + UI + **`processing_error`**; **`failed`** status on worker exception. |
 
 ---
@@ -142,7 +139,7 @@ These are **not** a separate product pillar but parallel tracks that attach to t
 | **P4 — Observability** | Structured logs, correlation id per `document_id`, basic metrics on job success/fail. |
 | **P5 — E2E smoke** | Scripted path: upload → normalized bill → anomaly → explain → review on a fixed PDF set. |
 
-**Suggested dependency order (logical, not calendar):** **1a→1b→1d** and **1e→1f→1g→1d** in parallel after **1a**; **1c** / **1h** track UI; **2a→2b→2c→2d** after first worker runs extraction; **3a→3b→3d** once **2d** exists for two+ periods; **4a→4b→4c→4d** after **3d**; **5a→5b→5c→5d→5e** can start as soon as **3d** has stable IDs, with UI polishing when **4d** exists.
+**Suggested dependency order (logical, not calendar):** **1a→1b→1d**; **1c** / **1h** track UI; **2a→2b→2c→2d** after first worker runs extraction; **3a→3b→3d** once **2d** exists for two+ periods; **4a→4b→4c→4d** after **3d**; **5a→5b→5c→5d→5e** can start as soon as **3d** has stable IDs, with UI polishing when **4d** exists. (Inbound email **1e–1g** is deferred—see table above.)
 
 ---
 
@@ -169,7 +166,7 @@ These are **not** a separate product pillar but parallel tracks that attach to t
 
 ### 1.3 Object storage
 
-**S3-compatible** storage (S3, GCS, R2, MinIO locally) for PDFs, scans, email attachments. Postgres stores **metadata + pointers** only (`bucket`, `key`, `sha256`, `mime_type`, `byte_size`).
+**S3-compatible** storage (S3, GCS, R2, MinIO locally) for PDFs and scans. Postgres stores **metadata + pointers** only (`bucket`, `key`, `sha256`, `mime_type`, `byte_size`).
 
 ### 1.4 AI layer
 
@@ -193,7 +190,7 @@ One Postgres, one object store, one worker deployment, single region. Docker Com
 
 ### 2.1 Phase 1 (0–4 months) — Functional MVP (everything works)
 
-Goal: **One coherent product** matching the product roadmap—multi-site utility bills, upload + email, anomalies with grounded explanations, user review—not a sequence of disconnected spikes.
+Goal: **One coherent product** matching the product roadmap—multi-site utility bills, reliable upload ingestion, anomalies with grounded explanations, user review—not a sequence of disconnected spikes.
 
 Suggested **calendar** (adjust for team size; parallelize where possible):
 
@@ -209,7 +206,7 @@ Suggested **calendar** (adjust for team size; parallelize where possible):
 
 **Phase 1 engineering definition of done (must all be true):**
 
-1. A user can **upload** a utility PDF **or** have it arrive by **email**, and see processing status through completion.  
+1. A user can **upload** a utility PDF and see processing status through completion.  
 2. **Normalized** bill data is queryable per site and period.  
 3. **Anomalies** appear when history allows (including after the second bill for a site).  
 4. Each anomaly has a **grounded explanation** and a **confidence** indicator.  

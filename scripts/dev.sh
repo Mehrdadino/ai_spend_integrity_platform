@@ -54,17 +54,13 @@ for i in {1..45}; do
   fi
 done
 
-echo "==> seed-dev-org (dev org + ingest_email_token for email webhook)"
+echo "==> seed-dev-org (dev org for X-Organization-Id / VITE_ORG_ID)"
 if (cd "$ROOT/backend" && "${PY}" -m app.scripts.seed_dev_org); then
   :
 else
   echo "WARNING: seed-dev-org failed. Fix DB/migrations, then from backend/ with your venv active: python -m alembic upgrade head && python -m app.scripts.seed_dev_org (see .cursor/rules/local-dev-stack.mdc)"
 fi
 
-echo "==> Inbound email webhook (copy for Mailgun/SendGrid or curl)"
-(cd "$ROOT/backend" && "${PY}" -m app.scripts.print_dev_ingest_webhook) || true
-echo "Local PDF test: ./scripts/test-inbound-email-local.sh \"\$HOME/Downloads/your-bill.pdf\""
-echo "Full email-from-Gmail flow: see .cursor/rules/local-dev-stack.mdc"
 echo ""
 
 if [[ "${SKIP_DOCUMENT_WORKER:-}" == "1" ]]; then

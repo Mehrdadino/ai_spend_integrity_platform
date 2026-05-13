@@ -1,7 +1,4 @@
-"""Organization lookups and idempotent ``ensure`` helpers for dev/CLI.
-
-Includes ingest-token resolution for the inbound-email webhook (step 1f).
-"""
+"""Organization lookups and idempotent ``ensure`` helpers for dev/CLI."""
 
 from __future__ import annotations
 
@@ -22,13 +19,6 @@ def get_organization_by_id(session: Session, organization_id: uuid.UUID) -> Opti
 def get_organization_by_slug(session: Session, slug: str) -> Optional[Organization]:
     """Stable slug lookup (e.g. ``dev`` for local seeds)."""
     return session.scalar(select(Organization).where(Organization.slug == slug))
-
-
-def get_organization_by_ingest_email_token(session: Session, token: str) -> Optional[Organization]:
-    """Resolve tenant for inbound-email multipart POST (step 1f); token must match exactly."""
-    if not token:
-        return None
-    return session.scalar(select(Organization).where(Organization.ingest_email_token == token))
 
 
 def ensure_organization(session: Session, *, name: str, slug: str) -> Organization:

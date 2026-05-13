@@ -40,14 +40,6 @@ class Settings(BaseSettings):
     # Recorded on ``document_raw_extractions.model_id`` until real LLM wiring (2a stub).
     raw_extraction_stub_model_id: str = "stub-llm"
 
-    # Inbound email webhook (1e–1g): optional Mailgun signature (HTTP webhook signing key).
-    mailgun_webhook_signing_key: str = ""
-    # If both set, inbound POST must send this header (SendGrid/mail routes “custom MIME headers”).
-    inbound_email_webhook_header_name: str = ""
-    inbound_email_webhook_header_value: str = ""
-    # Cap bill-like attachments processed from a single MIME message (abuse guard).
-    inbound_email_max_documents_per_request: int = 5
-
 
 @lru_cache
 def get_settings() -> Settings:

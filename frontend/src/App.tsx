@@ -340,7 +340,7 @@ export function App() {
         <p className="lede">
           {view === "upload"
             ? "Utility bills and related PDFs — presigned flow (dev)."
-            : "Pipeline state per document (upload + email sources). Click a row for preview and metadata. Newest first."}
+            : "Pipeline state per document. Click a row for preview and metadata. Newest first."}
         </p>
       </header>
 

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
-
 from sqlalchemy import DateTime, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,18 +11,13 @@ from app.db.base import Base
 
 
 class Organization(Base):
-    """A customer or pilot tenant. ``slug`` is stable for dev seeds and URLs.
-
-    ``ingest_email_token`` (when set) is the opaque path segment for the inbound-email
-    webhook so providers that cannot send ``X-Organization-Id`` still resolve tenancy.
-    """
+    """A customer or pilot tenant. ``slug`` is stable for dev seeds and URLs."""
 
     __tablename__ = "organizations"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
-    ingest_email_token: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     sites: Mapped[list["Site"]] = relationship("Site", back_populates="organization")

@@ -20,7 +20,6 @@ dependencies = [
 register-document = "app.scripts.register_document:main"
 document-worker = "app.scripts.run_rq_worker:main"
 seed-dev-org = "app.scripts.seed_dev_org:main"
-print-dev-ingest-webhook = "app.scripts.print_dev_ingest_webhook:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

@@ -41,7 +41,7 @@ def _utc_now() -> datetime:
 
 
 class Document(Base):
-    """One uploaded or emailed file; object bytes live in the configured bucket."""
+    """One uploaded file; object bytes live in the configured bucket."""
 
     __tablename__ = "documents"
     __table_args__ = (

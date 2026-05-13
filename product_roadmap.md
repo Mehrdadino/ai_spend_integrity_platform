@@ -27,9 +27,9 @@ Just:
 ### Built so far (Phase 1 — ingestion shell + list UI)
 
 - **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO** (S3-compatible file storage), **Redis + RQ** for a first background job after upload, **Vite + React + TypeScript** UI under `frontend/`. Docker Compose runs Postgres, MinIO, and Redis locally.
-- **Document ingestion:** browser, CLI, or **inbound email webhook** can get a file into **object storage** + **Postgres** (`documents` with hash, size, MIME, `source`, `processing_status`). **Presigned upload** + **upload UI** + **read-back** by id; **email** path via `POST /api/v1/webhooks/inbound-email/{token}` (tenant token on org, optional Mailgun signature / static header).
+- **Document ingestion:** browser (presigned PUT) or **CLI** (`register-document`) gets a file into **object storage** + **Postgres** (`documents` with hash, size, MIME, `source`, `processing_status`). **Presigned upload** + **upload UI** + **read-back** by id and a **viewer** endpoint with presigned GET for preview.
 - **Ingestion status (step 1h):** **`GET /api/v1/documents`** lists org documents (newest first); frontend **Documents** tab shows pipeline status, **`processing_error`** when the worker sets **`failed`**, source, MIME, size, and timestamps. GET detail includes the latest **raw extraction** snapshot when present.
-- **Background pipeline:** after upload finalize or email ingest, **RQ** runs **`process_document_pipeline`**: **`queued`** → **`received`** → **Pydantic-validated** stub payload (**2b**) → append-only **`document_raw_extractions`** (**2a**) → **`extracted`**; failures (validation or other) set **`failed`** + **`processing_error`**.
+- **Background pipeline:** after upload finalize, **RQ** runs **`process_document_pipeline`**: **`queued`** → **`received`** → **Pydantic-validated** stub payload (**2b**) → append-only **`document_raw_extractions`** (**2a**) → **`extracted`**; failures (validation or other) set **`failed`** + **`processing_error`**.
 - **Auth:** development-style **organization UUID header** only; not production multi-tenant auth.
 
 ### Still to build for Phase 1 MVP (unchanged intent)
@@ -82,7 +82,6 @@ What You Actually Build
 You SHOULD Build
 1. Document ingestion
 upload UI
-email forwarding
 storage
 2. Structured normalization layer
 

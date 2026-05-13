@@ -2,8 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import documents, webhooks_inbound_email
+from app.api.v1 import documents
 
 api_router = APIRouter()
 api_router.include_router(documents.router)
-api_router.include_router(webhooks_inbound_email.router)
