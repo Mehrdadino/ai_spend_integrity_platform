@@ -1,6 +1,6 @@
 """FastAPI application entry: HTTP API, lifespan hooks, and health checks.
 
-Mounts versioned routers under ``/api/v1``. On startup, ensures the documents
+Mounts versioned routers under ``/api/v1`` (documents, organizations). On startup, ensures the documents
 S3 bucket exists so uploads (presigned or server-side) do not fail mid-request.
 """
 

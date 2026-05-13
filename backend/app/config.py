@@ -37,8 +37,15 @@ class Settings(BaseSettings):
     # Redis for RQ (step 1d). Set empty to skip enqueue (document stays ``queued`` until you run worker).
     redis_url: str = "redis://127.0.0.1:6379/0"
 
-    # Recorded on ``document_raw_extractions.model_id`` until real LLM wiring (2a stub).
+    # Recorded on ``document_raw_extractions.model_id`` when no LLM is configured.
     raw_extraction_stub_model_id: str = "stub-llm"
+
+    # Optional OpenAI-compatible ``/chat/completions`` for ``generic-bill-v1`` (worker).
+    # Empty ``extraction_llm_api_key`` → deterministic extraction only.
+    extraction_llm_api_key: str = ""
+    extraction_llm_base_url: str = "https://api.openai.com/v1"
+    extraction_llm_model: str = "gpt-4o-mini"
+    extraction_llm_timeout_seconds: int = 90
 
 
 @lru_cache

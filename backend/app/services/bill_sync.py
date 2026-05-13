@@ -43,7 +43,7 @@ def upsert_bill_for_document(
         raw_extraction_id=raw_extraction.id,
         spend_domain=bundle.spend_domain,
         spend_kind=bundle.spend_kind,
-        issuer_name=None,
+        issuer_name=bundle.issuer_name,
         period_start=None,
         period_end=None,
         currency=bundle.currency,

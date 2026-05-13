@@ -2,26 +2,45 @@
  * Phase 1 ingestion UI: presigned upload (1c) + document list with **processing_error**
  * and status (1h), plus a **document viewer** (preview + metadata) from list click,
  * upload result, or deep link ``?doc=<uuid>`` (requires ``X-Organization-Id``).
+ * **Organizations** tab lists/creates tenants (no org header). **Reprocess** re-queues the worker.
+ * While a document is ``queued`` / ``pending`` / ``received``, the viewer and bill refetch on a short interval (no full page reload).
  *
  * Upload stays disabled until **Organization ID** is filled (``X-Organization-Id``).
  * Prefill via ``VITE_ORG_ID`` in ``frontend/.env``.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  createOrganization,
+  fetchOrganizationsList,
+  type OrganizationResponse,
+} from "./lib/organizations";
+import {
   completeUpload,
+  fetchDocumentBill,
   fetchDocumentViewer,
   fetchDocumentsList,
   presignUpload,
   putFileToPresignedUrl,
+  reprocessDocument,
+  type BillResponse,
   type CompleteUploadResponse,
   type DocumentListItemResponse,
   type DocumentViewerResponse,
 } from "./lib/upload";
 
 type Phase = "idle" | "presigning" | "uploading" | "completing" | "done" | "error";
-type AppView = "upload" | "documents";
+type AppView = "upload" | "documents" | "organizations";
 
 const defaultApiBase = "http://127.0.0.1:8000";
+
+/** Interval (ms) for refetching viewer + bill while ``queued`` / ``pending`` / ``received``. */
+const PIPELINE_POLL_MS = 2500;
+
+/** Dice-friendly random strings for the org form (slug must stay URL-safe: letters, digits, hyphens). */
+function randomToken(len = 10): string {
+  const hex = crypto.randomUUID().replace(/-/g, "");
+  return hex.slice(0, len);
+}
 
 /** Read ``doc`` from the current location (deep link to open the viewer). */
 function docIdFromSearch(): string | null {
@@ -85,30 +104,83 @@ function DocumentPreview({ viewer }: { viewer: DocumentViewerResponse }) {
 }
 
 function DocumentViewerPanel({
+  headerDocumentId,
   viewer,
   loading,
   error,
+  bill,
+  billLoading,
+  billError,
   onClose,
+  onReprocess,
+  reprocessBusy,
+  reprocessError,
+  pipelinePolling,
 }: {
+  headerDocumentId: string | null;
   viewer: DocumentViewerResponse | null;
   loading: boolean;
   error: string | null;
+  bill: BillResponse | null;
+  billLoading: boolean;
+  billError: string | null;
   onClose: () => void;
+  /** When set, show **Reprocess** to re-enqueue the worker (stuck ``queued``, ``extracted`` without bill, etc.). */
+  onReprocess?: () => void;
+  reprocessBusy?: boolean;
+  reprocessError?: string | null;
+  /** True while status is ``queued`` / ``pending`` / ``received`` — parent polls API in the background. */
+  pipelinePolling?: boolean;
 }) {
-  if (!loading && !error && !viewer) {
+  const showPanel =
+    loading ||
+    error ||
+    !!viewer ||
+    billLoading ||
+    billError ||
+    bill !== null ||
+    reprocessBusy ||
+    !!reprocessError;
+  const reprocessBlocked = !viewer || viewer.processing_status === "awaiting_object";
+  const reprocessTitle = reprocessBlocked
+    ? !viewer
+      ? "Open a finalized document first."
+      : "Finalize the upload before reprocessing."
+    : "Re-enqueue extraction + bill sync (safe after RQ crashes; may append another raw extraction).";
+  if (!showPanel) {
     return null;
   }
   return (
     <section className="card doc-viewer-card" aria-live="polite">
       <div className="doc-viewer-toolbar">
-        <h2>Document</h2>
+        <h2 className="doc-viewer-title-wrap">
+          Document
+          {headerDocumentId ? (
+            <code className="header-doc-id" title="Document UUID">
+              {headerDocumentId}
+            </code>
+          ) : null}
+        </h2>
         <div className="doc-viewer-toolbar-actions">
           {loading ? <span className="hint">Loading preview…</span> : null}
+          {billLoading ? <span className="hint">Loading bill…</span> : null}
+          {onReprocess ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={reprocessBusy || reprocessBlocked}
+              title={reprocessTitle}
+              onClick={() => onReprocess()}
+            >
+              {reprocessBusy ? "Reprocessing…" : "Reprocess"}
+            </button>
+          ) : null}
           <button type="button" className="secondary" onClick={onClose}>
             Close
           </button>
         </div>
       </div>
+      {reprocessError ? <p className="error">{reprocessError}</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {viewer && !loading ? (
         <>
@@ -131,6 +203,9 @@ function DocumentViewerPanel({
             <dt>Status</dt>
             <dd>
               <span className={statusPillClass(viewer.processing_status)}>{viewer.processing_status}</span>
+              {pipelinePolling ? (
+                <span className="hint doc-status-poll-hint"> · auto-refresh until worker finishes</span>
+              ) : null}
             </dd>
             {viewer.processing_error ? (
               <>
@@ -161,6 +236,75 @@ function DocumentViewerPanel({
           ) : null}
         </>
       ) : null}
+      {billLoading || billError || bill !== null ? (
+        <div className="bill-section">
+          <h3 className="bill-section-title">Normalized bill</h3>
+          {billError ? <p className="error">{billError}</p> : null}
+          {!billLoading && !billError && bill === null ? (
+            <p className="hint">
+              No bill row yet. If status is <strong>extracted</strong> but the bill never appeared, use{" "}
+              <strong>Reprocess</strong>. While the document is queued for the worker, status and bill refresh here
+              automatically.
+            </p>
+          ) : null}
+          {!billLoading && bill ? (
+            <>
+              <dl className="kv bill-header-kv">
+                <dt>Bill ID</dt>
+                <dd>
+                  <code>{bill.id}</code>
+                </dd>
+                <dt>Spend domain</dt>
+                <dd>{bill.spend_domain}</dd>
+                <dt>Spend kind</dt>
+                <dd>{bill.spend_kind ?? "—"}</dd>
+                <dt>Issuer</dt>
+                <dd>{bill.issuer_name ?? "—"}</dd>
+                <dt>Total</dt>
+                <dd>
+                  {bill.total_amount != null && bill.total_amount !== undefined
+                    ? `${bill.total_amount} ${bill.currency}`
+                    : "—"}
+                </dd>
+                <dt>Normalization</dt>
+                <dd className="cell-mono">{bill.normalization_version}</dd>
+              </dl>
+              {bill.line_items.length > 0 ? (
+                <div className="table-wrap bill-table-wrap">
+                  <table className="bill-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Label</th>
+                        <th>Kind</th>
+                        <th>Service</th>
+                        <th>Qty</th>
+                        <th>Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bill.line_items.map((li) => (
+                        <tr key={li.id}>
+                          <td>{li.position}</td>
+                          <td>{li.raw_label}</td>
+                          <td className="cell-mono">{li.canonical_line_kind}</td>
+                          <td className="cell-mono">{li.canonical_service_key ?? "—"}</td>
+                          <td className="cell-mono">
+                            {li.quantity != null ? `${li.quantity} ${li.quantity_unit ?? ""}`.trim() : "—"}
+                          </td>
+                          <td>{li.amount != null ? `${li.amount} ${li.currency}` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="hint">Bill header exists but no line items.</p>
+              )}
+            </>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -187,6 +331,23 @@ export function App() {
   const [documentViewer, setDocumentViewer] = useState<DocumentViewerResponse | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
+  const [documentBill, setDocumentBill] = useState<BillResponse | null>(null);
+  const [billLoading, setBillLoading] = useState(false);
+  const [billError, setBillError] = useState<string | null>(null);
+  /** Bump after reprocess (or similar) to refetch viewer + bill without changing selection. */
+  const [viewerReloadNonce, setViewerReloadNonce] = useState(0);
+  const [reprocessBusy, setReprocessBusy] = useState(false);
+  const [reprocessError, setReprocessError] = useState<string | null>(null);
+
+  const [orgFormName, setOrgFormName] = useState("");
+  const [orgFormSlug, setOrgFormSlug] = useState("");
+  /** Ephemeral dev-only field (not sent to API); filled when you click **Randomize**. */
+  const [orgScratchLabel, setOrgScratchLabel] = useState("");
+  const [orgRows, setOrgRows] = useState<OrganizationResponse[]>([]);
+  const [orgListLoading, setOrgListLoading] = useState(false);
+  const [orgListError, setOrgListError] = useState<string | null>(null);
+  const [orgCreateBusy, setOrgCreateBusy] = useState(false);
+  const [orgCreateMessage, setOrgCreateMessage] = useState<string | null>(null);
 
   const phaseAllowsSubmit = phase === "idle" || phase === "done" || phase === "error";
 
@@ -211,6 +372,10 @@ export function App() {
   const closeViewer = useCallback(() => {
     setSelectedDocId(null);
     replaceDocQuery(null);
+    setDocumentBill(null);
+    setBillError(null);
+    setBillLoading(false);
+    setReprocessError(null);
   }, []);
 
   /** Deep link: open Documents tab and select ``?doc=`` once on first mount. */
@@ -232,6 +397,7 @@ export function App() {
       return;
     }
     let cancelled = false;
+    setReprocessError(null);
     setViewerLoading(true);
     setViewerError(null);
     setDocumentViewer(null);
@@ -254,7 +420,40 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDocId, orgId, apiBase]);
+  }, [selectedDocId, orgId, apiBase, viewerReloadNonce]);
+
+  /** Load normalized bill (2d) in parallel with the viewer when a document is selected. */
+  useEffect(() => {
+    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+      setDocumentBill(null);
+      setBillError(null);
+      setBillLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setBillLoading(true);
+    setBillError(null);
+    setDocumentBill(null);
+    void fetchDocumentBill(apiBase.trim(), orgId.trim(), selectedDocId)
+      .then((res) => {
+        if (!cancelled) {
+          setDocumentBill(res.bill);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setBillError(e instanceof Error ? e.message : String(e));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setBillLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDocId, orgId, apiBase, viewerReloadNonce]);
 
   const runUpload = useCallback(async () => {
     if (!file || !orgId.trim()) {
@@ -312,6 +511,82 @@ export function App() {
     void loadDocumentList();
   }, [loadDocumentList]);
 
+  /** Poll viewer + bill while pipeline may still be running (no full-page reload). */
+  useEffect(() => {
+    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+      return;
+    }
+    const status = documentViewer?.processing_status;
+    const busy = status === "queued" || status === "pending" || status === "received";
+    if (!busy) {
+      return;
+    }
+    const tick = () => {
+      setViewerReloadNonce((n) => n + 1);
+      if (view === "documents") {
+        void loadDocumentList();
+      }
+    };
+    const id = window.setInterval(tick, PIPELINE_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [selectedDocId, orgId, apiBase, documentViewer?.processing_status, view, loadDocumentList]);
+
+  const loadOrganizationsList = useCallback(async () => {
+    if (!apiBase.trim()) {
+      setOrgListError("Set API base URL first.");
+      return;
+    }
+    setOrgListError(null);
+    setOrgListLoading(true);
+    try {
+      const rows = await fetchOrganizationsList(apiBase.trim(), 200);
+      setOrgRows(rows);
+    } catch (e) {
+      setOrgListError(e instanceof Error ? e.message : String(e));
+      setOrgRows([]);
+    } finally {
+      setOrgListLoading(false);
+    }
+  }, [apiBase]);
+
+  const randomizeOrgForm = useCallback(() => {
+    const tok = randomToken(10);
+    setOrgFormName(`Random tenant ${tok}`);
+    setOrgFormSlug(`org-${tok}`);
+    setOrgScratchLabel(`pilot-${randomToken(8)} (not saved)`);
+  }, []);
+
+  const submitCreateOrganization = useCallback(async () => {
+    if (!apiBase.trim()) {
+      setOrgCreateMessage("Set API base URL.");
+      return;
+    }
+    const name = orgFormName.trim();
+    const slug = orgFormSlug.trim();
+    if (!name || !slug) {
+      setOrgCreateMessage("Enter display name and slug (or click Randomize).");
+      return;
+    }
+    setOrgCreateBusy(true);
+    setOrgCreateMessage(null);
+    try {
+      const created = await createOrganization(apiBase.trim(), { name, slug });
+      setOrgCreateMessage(`Created: ${created.name} — UUID copied to Connection below.`);
+      setOrgId(created.id);
+      await loadOrganizationsList();
+    } catch (e) {
+      setOrgCreateMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOrgCreateBusy(false);
+    }
+  }, [apiBase, orgFormName, orgFormSlug, loadOrganizationsList]);
+
+  const goToOrganizations = useCallback(() => {
+    setView("organizations");
+    closeViewer();
+    void loadOrganizationsList();
+  }, [closeViewer, loadOrganizationsList]);
+
   const goToUpload = useCallback(() => {
     setView("upload");
     closeViewer();
@@ -322,8 +597,42 @@ export function App() {
     replaceDocQuery(documentId);
   }, []);
 
-  const pageClass = view === "documents" ? "page page--wide" : "page";
-  const pageWideWithViewer = view === "documents" && (selectedDocId !== null || viewerLoading || viewerError);
+  const handleReprocessSelected = useCallback(async () => {
+    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+      return;
+    }
+    setReprocessBusy(true);
+    setReprocessError(null);
+    try {
+      await reprocessDocument(apiBase.trim(), orgId.trim(), selectedDocId);
+      setViewerReloadNonce((n) => n + 1);
+      if (view === "documents") {
+        void loadDocumentList();
+      }
+    } catch (e) {
+      setReprocessError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReprocessBusy(false);
+    }
+  }, [selectedDocId, orgId, apiBase, view, loadDocumentList]);
+
+  const pageClass = view === "documents" || view === "organizations" ? "page page--wide" : "page";
+  const pageWideWithViewer =
+    view === "documents" &&
+    (selectedDocId !== null ||
+      viewerLoading ||
+      viewerError ||
+      billLoading ||
+      billError ||
+      documentBill !== null ||
+      reprocessBusy ||
+      !!reprocessError);
+
+  const pipelinePolling =
+    !!documentViewer &&
+    (documentViewer.processing_status === "queued" ||
+      documentViewer.processing_status === "pending" ||
+      documentViewer.processing_status === "received");
 
   return (
     <div className={`${pageClass}${pageWideWithViewer ? " page--viewer" : ""}`}>
@@ -335,12 +644,23 @@ export function App() {
           <button type="button" className={view === "documents" ? "nav-btn nav-btn--active" : "nav-btn"} onClick={() => void goToDocuments()}>
             Documents
           </button>
+          <button
+            type="button"
+            className={view === "organizations" ? "nav-btn nav-btn--active" : "nav-btn"}
+            onClick={() => void goToOrganizations()}
+          >
+            Organizations
+          </button>
         </nav>
-        <h1>{view === "upload" ? "Document upload" : "Ingestion status"}</h1>
+        <h1>
+          {view === "upload" ? "Document upload" : view === "documents" ? "Ingestion status" : "Organizations"}
+        </h1>
         <p className="lede">
           {view === "upload"
             ? "Utility bills and related PDFs — presigned flow (dev)."
-            : "Pipeline state per document. Click a row for preview and metadata. Newest first."}
+            : view === "documents"
+              ? "Pipeline state per document. Click a row for preview and metadata. Newest first."
+              : "List tenants (UUID + slug) and create new ones for local dev — no auth on these API routes yet."}
         </p>
       </header>
 
@@ -366,12 +686,13 @@ export function App() {
           />
         </label>
         <p className="hint">
-          Set <code>VITE_API_BASE_URL</code> and <code>VITE_ORG_ID</code> in <code>frontend/.env</code> to prefill. Open a document with{" "}
-          <code>?doc=&lt;uuid&gt;</code> in the URL after choosing this org.
+          Set <code>VITE_API_BASE_URL</code> and <code>VITE_ORG_ID</code> in <code>frontend/.env</code> to prefill. Use the
+          Organizations tab to create tenants and copy UUIDs. Open a document with <code>?doc=&lt;uuid&gt;</code> in the URL
+          after choosing this org.
         </p>
       </section>
 
-      {view === "upload" ? (
+      {view === "upload" && (
         <>
           <section className="card">
             <h2>File</h2>
@@ -449,15 +770,29 @@ export function App() {
                 </button>
               </div>
               <DocumentViewerPanel
+                headerDocumentId={selectedDocId}
                 viewer={documentViewer?.document_id === result.document_id ? documentViewer : null}
                 loading={viewerLoading && selectedDocId === result.document_id}
                 error={selectedDocId === result.document_id ? viewerError : null}
+                bill={selectedDocId === result.document_id ? documentBill : null}
+                billLoading={selectedDocId === result.document_id ? billLoading : false}
+                billError={selectedDocId === result.document_id ? billError : null}
                 onClose={closeViewer}
+                onReprocess={() => void handleReprocessSelected()}
+                reprocessBusy={reprocessBusy}
+                reprocessError={reprocessError}
+                pipelinePolling={
+                  pipelinePolling &&
+                  !!documentViewer &&
+                  documentViewer.document_id === result.document_id &&
+                  selectedDocId === result.document_id
+                }
               />
             </section>
           ) : null}
         </>
-      ) : (
+      )}
+      {view === "documents" && (
         <div className="doc-layout">
           <section className="card doc-layout-list">
             <div className="doc-list-toolbar">
@@ -519,8 +854,108 @@ export function App() {
             ) : null}
             <p className="hint doc-table-hint">Tip: unfinished uploads (no object in storage yet) return 400 from the viewer API until you complete the PUT flow.</p>
           </section>
-          <DocumentViewerPanel viewer={documentViewer} loading={viewerLoading} error={viewerError} onClose={closeViewer} />
+          <DocumentViewerPanel
+            headerDocumentId={selectedDocId}
+            viewer={documentViewer}
+            loading={viewerLoading}
+            error={viewerError}
+            bill={documentBill}
+            billLoading={billLoading}
+            billError={billError}
+            onClose={closeViewer}
+            onReprocess={() => void handleReprocessSelected()}
+            reprocessBusy={reprocessBusy}
+            reprocessError={reprocessError}
+            pipelinePolling={pipelinePolling}
+          />
         </div>
+      )}
+      {view === "organizations" && (
+        <>
+          <section className="card">
+            <h2>Create organization</h2>
+            <p className="hint">
+              Slug must look like <code>acme-corp</code> (letters, digits, single hyphens). The scratch field is UI-only
+              (not stored).
+            </p>
+            <label className="field">
+              <span>Display name</span>
+              <input
+                value={orgFormName}
+                onChange={(e) => setOrgFormName(e.target.value)}
+                placeholder="Acme Corp"
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>Slug</span>
+              <input
+                value={orgFormSlug}
+                onChange={(e) => setOrgFormSlug(e.target.value)}
+                placeholder="acme-corp"
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>Scratch label (optional, not sent to API)</span>
+              <input value={orgScratchLabel} readOnly placeholder="Click Randomize" className="input-readonly" />
+            </label>
+            <div className="actions-row">
+              <button type="button" className="secondary" onClick={randomizeOrgForm}>
+                Randomize
+              </button>
+              <button type="button" disabled={orgCreateBusy} onClick={() => void submitCreateOrganization()}>
+                {orgCreateBusy ? "Creating…" : "Create organization"}
+              </button>
+            </div>
+            {orgCreateMessage && orgCreateMessage.startsWith("Created:") ? (
+              <p className="hint org-flash-ok">{orgCreateMessage}</p>
+            ) : orgCreateMessage ? (
+              <p className="error">{orgCreateMessage}</p>
+            ) : null}
+          </section>
+          <section className="card">
+            <div className="doc-list-toolbar">
+              <h2>Tenants</h2>
+              <button type="button" disabled={orgListLoading} onClick={() => void loadOrganizationsList()}>
+                {orgListLoading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+            {orgListError ? <p className="error">{orgListError}</p> : null}
+            {!orgListError && !orgListLoading && orgRows.length === 0 ? <p className="hint">No organizations yet.</p> : null}
+            {orgRows.length > 0 ? (
+              <div className="table-wrap">
+                <table className="doc-table">
+                  <thead>
+                    <tr>
+                      <th>Created</th>
+                      <th>Name</th>
+                      <th>Slug</th>
+                      <th>UUID</th>
+                      <th> </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orgRows.map((row) => (
+                      <tr key={row.id}>
+                        <td>{new Date(row.created_at).toLocaleString()}</td>
+                        <td>{row.name}</td>
+                        <td className="cell-mono">{row.slug}</td>
+                        <td className="cell-mono cell-id">{row.id}</td>
+                        <td>
+                          <button type="button" className="secondary table-inline-btn" onClick={() => setOrgId(row.id)}>
+                            Use in Connection
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </section>
+        </>
       )}
     </div>
   );

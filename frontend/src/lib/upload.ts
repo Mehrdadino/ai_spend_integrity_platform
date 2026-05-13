@@ -1,6 +1,7 @@
 /**
  * Client for document APIs: presigned upload (1b–1c), list + detail (1h, 2a),
  * and presigned read URLs for in-browser preview (GET ``…/viewer`` / ``read-url``).
+ * Normalized bills: ``GET …/bill`` (2d read model).
  *
  * PUT goes **directly to MinIO/S3** (cross-origin); MinIO must allow the Vite
  * origin (`MINIO_API_CORS_ALLOW_ORIGIN` in docker-compose). Presigned GET
@@ -20,6 +21,13 @@ export interface CompleteUploadResponse {
   document_id: string;
   sha256: string;
   byte_size: number;
+  processing_status: string;
+  processing_error?: string | null;
+}
+
+/** Response from ``POST …/reprocess`` (row reset to ``queued`` for the worker). */
+export interface ReprocessDocumentResponse {
+  document_id: string;
   processing_status: string;
   processing_error?: string | null;
 }
@@ -65,6 +73,48 @@ export interface DocumentListItemResponse {
   processing_status: string;
   processing_error?: string | null;
   created_at: string;
+}
+
+/** One row under ``GET /api/v1/documents/{id}/bill`` (normalized line item). */
+export interface BillLineItemResponse {
+  id: string;
+  position: number;
+  raw_label: string;
+  canonical_line_kind: string;
+  canonical_service_key: string | null;
+  quantity: number | null;
+  quantity_unit: string | null;
+  amount: number | null;
+  currency: string;
+  extra: Record<string, unknown>;
+  created_at: string;
+}
+
+/** Normalized bill header + lines (2d). */
+export interface BillResponse {
+  id: string;
+  organization_id: string;
+  site_id: string | null;
+  document_id: string;
+  raw_extraction_id: string | null;
+  spend_domain: string;
+  spend_kind: string | null;
+  issuer_name: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  currency: string;
+  total_amount: number | null;
+  summary: Record<string, unknown> | null;
+  normalization_version: string;
+  created_at: string;
+  updated_at: string;
+  line_items: BillLineItemResponse[];
+}
+
+/** ``GET …/bill`` envelope: ``bill`` is null until the worker has materialized 2d rows. */
+export interface DocumentBillResponse {
+  document_id: string;
+  bill: BillResponse | null;
 }
 
 function orgHeaders(orgId: string): HeadersInit {
@@ -193,4 +243,37 @@ export async function fetchDocumentViewer(
     throw new Error(`Document viewer failed (${res.status}): ${body}`);
   }
   return res.json() as Promise<DocumentViewerResponse>;
+}
+
+/** Normalized bill for the document viewer (same-org scoped); ``bill`` may be null. */
+export async function fetchDocumentBill(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+): Promise<DocumentBillResponse> {
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill`, {
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Document bill failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<DocumentBillResponse>;
+}
+
+/** Re-queue extraction + bill sync for a finalized document (``extracted`` / ``failed`` / ``received``). */
+export async function reprocessDocument(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+): Promise<ReprocessDocumentResponse> {
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/reprocess`, {
+    method: "POST",
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Reprocess failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<ReprocessDocumentResponse>;
 }

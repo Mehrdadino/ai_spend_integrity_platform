@@ -13,7 +13,8 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from app.constants.extraction import STUB_EXTRACTION_VERSION
+from app.constants.extraction import GENERIC_BILL_EXTRACTION_VERSION, STUB_EXTRACTION_VERSION
+from app.schemas.extraction.generic_bill_payload import GenericBillExtractionPayload
 from app.schemas.extraction.stub_payload import StubRawExtractionPayload
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,19 @@ def validate_raw_extraction_payload(
         except ValidationError as exc:
             msg = _format_pydantic_errors(exc)
             logger.warning("extraction_validate: stub payload invalid: %s", msg[:500])
+            raise ExtractionPayloadValidationError(msg) from exc
+        if model.document_id != expected_document_id:
+            raise ExtractionPayloadValidationError(
+                f"document_id in payload ({model.document_id}) does not match document ({expected_document_id})"
+            )
+        return model.model_dump(mode="json")
+
+    if extraction_version == GENERIC_BILL_EXTRACTION_VERSION:
+        try:
+            model = GenericBillExtractionPayload.model_validate(payload)
+        except ValidationError as exc:
+            msg = _format_pydantic_errors(exc)
+            logger.warning("extraction_validate: generic bill payload invalid: %s", msg[:500])
             raise ExtractionPayloadValidationError(msg) from exc
         if model.document_id != expected_document_id:
             raise ExtractionPayloadValidationError(

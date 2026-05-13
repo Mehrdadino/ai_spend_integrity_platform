@@ -66,7 +66,7 @@ echo ""
 if [[ "${SKIP_DOCUMENT_WORKER:-}" == "1" ]]; then
   echo "==> SKIP_DOCUMENT_WORKER=1 — not starting RQ document-worker"
 else
-  echo "==> document worker (RQ, queue documents)"
+  echo "==> document worker (RQ, queue documents; SimpleWorker on macOS — see run_rq_worker docstring)"
   (cd "$ROOT/backend" && exec "${PY}" -m app.scripts.run_rq_worker) &
   PIDS+=("$!")
 fi

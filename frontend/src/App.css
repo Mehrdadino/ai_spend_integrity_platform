@@ -64,8 +64,61 @@ body {
   margin-bottom: 0.75rem;
 }
 
-.doc-viewer-toolbar h2 {
+.doc-viewer-title-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
   margin: 0;
+  font-size: 1.05rem;
+}
+
+.header-doc-id {
+  font-size: 0.75rem;
+  font-weight: 400;
+  word-break: break-all;
+}
+
+.bill-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.bill-section-title {
+  margin: 0 0 0.65rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.bill-header-kv {
+  margin-bottom: 0.75rem;
+}
+
+.bill-table-wrap {
+  margin-top: 0.35rem;
+}
+
+.bill-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.bill-table th,
+.bill-table td {
+  text-align: left;
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.bill-table th {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.68rem;
 }
 
 .doc-viewer-toolbar-actions {
@@ -73,6 +126,10 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+}
+
+.doc-viewer-toolbar-actions .hint {
+  font-size: 0.78rem;
 }
 
 .doc-preview-shell {
@@ -277,6 +334,27 @@ button.secondary {
 
 .actions-row .secondary {
   margin-top: 0;
+}
+
+.input-readonly {
+  opacity: 0.88;
+  cursor: default;
+}
+
+.org-flash-ok {
+  color: var(--ok);
+}
+
+.table-inline-btn {
+  margin-top: 0;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.doc-status-poll-hint {
+  display: inline;
+  font-weight: 400;
+  margin-left: 0.15rem;
 }
 
 .doc-list-toolbar {

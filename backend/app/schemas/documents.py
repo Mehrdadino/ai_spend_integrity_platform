@@ -39,6 +39,14 @@ class CompleteUploadResponse(BaseModel):
     processing_error: Optional[str] = None
 
 
+class ReprocessDocumentResponse(BaseModel):
+    """Same status fields as list/detail after requeue: ``queued`` until the worker runs."""
+
+    document_id: UUID
+    processing_status: str
+    processing_error: Optional[str] = None
+
+
 class RawExtractionSnapshotResponse(BaseModel):
     """Latest ``document_raw_extractions`` row for GET detail (debug / support)."""
 

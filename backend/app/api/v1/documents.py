@@ -2,8 +2,8 @@
 
 All routes require ``X-Organization-Id`` matching an organization UUID.
 
-Static paths (``presigned-upload``) and sub-resources (``read-url``, ``viewer``)
-are registered before bare ``GET /{document_id}`` so path segments are not
+Static paths (``presigned-upload``) and sub-resources (``read-url``, ``viewer``, ``bill``,
+``reprocess``) are registered before bare ``GET /{document_id}`` so path segments are not
 parsed as UUIDs where inappropriate. The collection route ``GET ""`` must stay
 before ``GET /{document_id}``.
 """
@@ -20,8 +20,10 @@ from app.config import get_settings
 from app.db.session import get_db
 from app.models.document import Document
 from app.models.organization import Organization
+from app.repositories.bills import get_bill_for_org_document
 from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
 from app.repositories.documents import get_document_for_organization, list_documents_for_organization
+from app.schemas.bills import BillResponse, DocumentBillResponse
 from app.schemas.documents import (
     CompleteUploadResponse,
     DocumentDetailResponse,
@@ -31,9 +33,14 @@ from app.schemas.documents import (
     PresignedUploadRequest,
     PresignedUploadResponse,
     RawExtractionSnapshotResponse,
+    ReprocessDocumentResponse,
 )
 from app.services.document_pipeline_queue import enqueue_document_pipeline_safe
 from app.services.document_read_urls import presigned_get_url_for_document
+from app.services.document_reprocess import (
+    ReprocessDocumentBadRequest,
+    reprocess_document_for_organization,
+)
 from app.services.upload_sessions import (
     complete_presigned_upload,
     create_presigned_upload,
@@ -196,6 +203,51 @@ def get_document_viewer(
         **detail.model_dump(),
         read_url=url,
         read_url_expires_in_seconds=ttl,
+    )
+
+
+@router.get("/{document_id}/bill", response_model=DocumentBillResponse)
+def get_document_bill(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> DocumentBillResponse:
+    """Return the normalized bill for this document, or ``bill: null`` if not materialized yet."""
+    doc = get_document_for_organization(
+        db, document_id=document_id, organization_id=org.id
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    bill = get_bill_for_org_document(db, organization_id=org.id, document_id=document_id)
+    if bill is None:
+        return DocumentBillResponse(document_id=document_id, bill=None)
+    return DocumentBillResponse(
+        document_id=document_id,
+        bill=BillResponse.model_validate(bill),
+    )
+
+
+@router.post("/{document_id}/reprocess", response_model=ReprocessDocumentResponse)
+def post_reprocess_document(
+    document_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> ReprocessDocumentResponse:
+    """Reset pipeline to ``queued`` and enqueue the worker (``extracted`` / ``failed`` / ``received`` / ``queued`` / ``pending``)."""
+    try:
+        doc = reprocess_document_for_organization(
+            db, organization_id=org.id, document_id=document_id
+        )
+    except ReprocessDocumentBadRequest as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    background_tasks.add_task(enqueue_document_pipeline_safe, doc.id)
+    return ReprocessDocumentResponse(
+        document_id=doc.id,
+        processing_status=doc.processing_status,
+        processing_error=doc.processing_error,
     )
 
 

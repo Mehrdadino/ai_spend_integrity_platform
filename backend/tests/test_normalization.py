@@ -116,3 +116,33 @@ class TestBuildBundleFromStub(unittest.TestCase):
         bundle = build_normalized_bundle(document=doc, raw_row=raw)
         self.assertEqual(bundle.lines, [])
         self.assertEqual(bundle.spend_domain, SPEND_DOMAIN_UNSPECIFIED)
+
+    def test_build_bundle_from_generic(self) -> None:
+        did = UUID("00000000-0000-0000-0000-000000000099")
+        doc = Document(
+            id=did,
+            organization_id=UUID("00000000-0000-0000-0000-000000000001"),
+            site_id=None,
+            bucket="b",
+            object_key="k",
+            sha256="a" * 64,
+            mime_type="application/pdf",
+            byte_size=1,
+            source="upload",
+            processing_status="extracted",
+        )
+        from app.schemas.extraction.generic_bill_payload import GenericBillExtractionPayload, GenericBillLineItem
+        from app.services.normalization.from_extraction import build_bundle_from_generic
+
+        model = GenericBillExtractionPayload(
+            document_id=did,
+            spend_domain="telecom",
+            spend_kind="fiber",
+            issuer_name="ISP Inc",
+            currency="USD",
+            lines=[GenericBillLineItem(raw_label="Internet service", amount=79.99, service_hint="internet")],
+        )
+        bundle = build_bundle_from_generic(doc, model)
+        self.assertEqual(bundle.spend_domain, "telecom")
+        self.assertEqual(bundle.issuer_name, "ISP Inc")
+        self.assertEqual(len(bundle.lines), 1)

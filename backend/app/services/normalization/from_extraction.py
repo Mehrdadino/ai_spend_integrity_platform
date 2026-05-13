@@ -1,18 +1,19 @@
 """Build ``NormalizedBillDraft`` from ``document_raw_extractions`` rows (2c).
 
-``build_normalized_bundle`` is version-dispatched: today ``stub-v1`` maps optional
-``draft_lines`` into canonical kinds/units/service keys; unknown versions still
+``build_normalized_bundle`` is version-dispatched: ``stub-v1`` and ``generic-bill-v1``
+map line items into canonical kinds/units/service keys; unknown versions still
 produce a minimal header-only bill so the worker does not crash before a mapper exists.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
-from app.constants.extraction import STUB_EXTRACTION_VERSION
+from app.constants.extraction import GENERIC_BILL_EXTRACTION_VERSION, STUB_EXTRACTION_VERSION
 from app.constants.normalization import (
     NORM_VERSION,
     SPEND_DOMAIN_CONTRACT,
@@ -22,6 +23,7 @@ from app.constants.normalization import (
 )
 from app.models.document import Document
 from app.models.document_raw_extraction import DocumentRawExtraction
+from app.schemas.extraction.generic_bill_payload import GenericBillExtractionPayload
 from app.schemas.extraction.stub_payload import StubRawExtractionPayload
 from app.services.normalization.line_kind import infer_line_kind
 from app.services.normalization.service_keys import infer_service_key
@@ -55,6 +57,7 @@ class NormalizedBillDraft:
     currency: str
     lines: list[NormalizedLineDraft]
     summary: dict[str, Any] = field(default_factory=dict)
+    issuer_name: str | None = None
 
 
 def _to_decimal(value: float | int | None) -> Decimal | None:
@@ -69,6 +72,9 @@ def normalize_spend_domain(raw: str | None) -> str:
         return SPEND_DOMAIN_UNSPECIFIED
     s = raw.strip().lower()
     mapping = {
+        "unspecified": SPEND_DOMAIN_UNSPECIFIED,
+        "unknown": SPEND_DOMAIN_UNSPECIFIED,
+        "other": SPEND_DOMAIN_UNSPECIFIED,
         "utility": SPEND_DOMAIN_UTILITY,
         "utilities": SPEND_DOMAIN_UTILITY,
         "energy": SPEND_DOMAIN_UTILITY,
@@ -91,27 +97,29 @@ def _normalize_spend_kind(raw: str | None) -> str | None:
     return t.lower()[:128]
 
 
-def build_bundle_from_stub(document: Document, model: StubRawExtractionPayload) -> NormalizedBillDraft:
-    """Normalize a validated ``stub-v1`` payload into a generic bill draft."""
-    spend_domain = normalize_spend_domain(model.spend_domain)
-    spend_kind = _normalize_spend_kind(model.spend_kind)
-    currency = "USD"
+def _normalized_lines_from_drafts(draft_lines: Sequence[Any]) -> list[NormalizedLineDraft]:
+    """Shared 2c line mapping for stub / generic line shapes (same attributes)."""
     lines: list[NormalizedLineDraft] = []
-
-    for i, d in enumerate(model.draft_lines):
-        qty = _to_decimal(d.quantity)
-        amt = _to_decimal(d.amount)
-        qunit = canonicalize_quantity_unit(d.quantity_unit)
-        line_kind = infer_line_kind(raw_label=d.raw_label, has_quantity=qty is not None)
-        svc = infer_service_key(raw_label=d.raw_label, service_hint=d.service_hint)
-        cur = (d.currency or "USD").strip().upper()[:3] or "USD"
+    for i, d in enumerate(draft_lines):
+        qty = _to_decimal(getattr(d, "quantity", None))
+        amt = _to_decimal(getattr(d, "amount", None))
+        raw_label = str(getattr(d, "raw_label", ""))
+        qunit = canonicalize_quantity_unit(getattr(d, "quantity_unit", None))
+        line_kind = infer_line_kind(raw_label=raw_label, has_quantity=qty is not None)
+        svc = infer_service_key(
+            raw_label=raw_label,
+            service_hint=getattr(d, "service_hint", None),
+        )
+        cur_raw = getattr(d, "currency", None) or "USD"
+        cur = str(cur_raw).strip().upper()[:3] or "USD"
         extra: dict[str, Any] = {}
-        if d.service_hint:
-            extra["service_hint"] = d.service_hint
+        hint = getattr(d, "service_hint", None)
+        if hint:
+            extra["service_hint"] = hint
         lines.append(
             NormalizedLineDraft(
                 position=i,
-                raw_label=d.raw_label,
+                raw_label=raw_label,
                 canonical_line_kind=line_kind,
                 canonical_service_key=svc,
                 quantity=qty,
@@ -121,7 +129,16 @@ def build_bundle_from_stub(document: Document, model: StubRawExtractionPayload) 
                 extra=extra,
             )
         )
+    return lines
 
+
+def _totals_and_summary(
+    *,
+    document: Document,
+    lines: list[NormalizedLineDraft],
+    source_extraction_version: str,
+    extra_summary: dict[str, Any] | None = None,
+) -> tuple[Decimal | None, dict[str, Any]]:
     total_amount: Decimal | None = None
     if lines:
         acc = Decimal("0")
@@ -131,14 +148,29 @@ def build_bundle_from_stub(document: Document, model: StubRawExtractionPayload) 
                 acc += ln.amount
                 any_amt = True
         total_amount = acc if any_amt else None
-
-    summary = {
+    summary: dict[str, Any] = {
         "normalization": NORM_VERSION,
-        "source_extraction_version": STUB_EXTRACTION_VERSION,
+        "source_extraction_version": source_extraction_version,
         "document_mime_type": document.mime_type,
-        "draft_line_count": len(model.draft_lines),
+        "line_count": len(lines),
     }
+    if extra_summary:
+        summary.update(extra_summary)
+    return total_amount, summary
 
+
+def build_bundle_from_stub(document: Document, model: StubRawExtractionPayload) -> NormalizedBillDraft:
+    """Normalize a validated ``stub-v1`` payload into a generic bill draft."""
+    spend_domain = normalize_spend_domain(model.spend_domain)
+    spend_kind = _normalize_spend_kind(model.spend_kind)
+    currency = "USD"
+    lines = _normalized_lines_from_drafts(model.draft_lines)
+    total_amount, summary = _totals_and_summary(
+        document=document,
+        lines=lines,
+        source_extraction_version=STUB_EXTRACTION_VERSION,
+        extra_summary={"draft_line_count": len(model.draft_lines)},
+    )
     return NormalizedBillDraft(
         spend_domain=spend_domain,
         spend_kind=spend_kind,
@@ -146,6 +178,32 @@ def build_bundle_from_stub(document: Document, model: StubRawExtractionPayload) 
         currency=currency,
         lines=lines,
         summary=summary,
+        issuer_name=None,
+    )
+
+
+def build_bundle_from_generic(document: Document, model: GenericBillExtractionPayload) -> NormalizedBillDraft:
+    """Normalize a validated ``generic-bill-v1`` payload (LLM or deterministic)."""
+    spend_domain = normalize_spend_domain(model.spend_domain)
+    spend_kind = _normalize_spend_kind(model.spend_kind)
+    currency = model.currency.upper()[:3]
+    lines = _normalized_lines_from_drafts(model.lines)
+    issuer = model.issuer_name.strip() if model.issuer_name and model.issuer_name.strip() else None
+    total_amount, summary = _totals_and_summary(
+        document=document,
+        lines=lines,
+        source_extraction_version=GENERIC_BILL_EXTRACTION_VERSION,
+    )
+    if issuer:
+        summary["issuer_name"] = issuer
+    return NormalizedBillDraft(
+        spend_domain=spend_domain,
+        spend_kind=spend_kind,
+        total_amount=total_amount,
+        currency=currency,
+        lines=lines,
+        summary=summary,
+        issuer_name=issuer,
     )
 
 
@@ -155,6 +213,9 @@ def build_normalized_bundle(*, document: Document, raw_row: DocumentRawExtractio
     if v == STUB_EXTRACTION_VERSION:
         model = StubRawExtractionPayload.model_validate(raw_row.raw_payload)
         return build_bundle_from_stub(document, model)
+    if v == GENERIC_BILL_EXTRACTION_VERSION:
+        model = GenericBillExtractionPayload.model_validate(raw_row.raw_payload)
+        return build_bundle_from_generic(document, model)
 
     logger.warning("normalization: no mapper for extraction_version=%r; header-only bill", v)
     return NormalizedBillDraft(
@@ -168,5 +229,5 @@ def build_normalized_bundle(*, document: Document, raw_row: DocumentRawExtractio
             "unmapped_extraction_version": v,
             "document_mime_type": document.mime_type,
         },
+        issuer_name=None,
     )
-
