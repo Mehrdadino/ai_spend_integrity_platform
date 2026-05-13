@@ -23,3 +23,4 @@ class Organization(Base):
     sites: Mapped[list["Site"]] = relationship("Site", back_populates="organization")
     users: Mapped[list["User"]] = relationship("User", back_populates="organization")
     documents: Mapped[list["Document"]] = relationship("Document", back_populates="organization")
+    bills: Mapped[list["Bill"]] = relationship("Bill", back_populates="organization")

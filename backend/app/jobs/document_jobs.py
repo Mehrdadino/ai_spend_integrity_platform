@@ -1,9 +1,10 @@
-"""RQ job handlers for the document ingestion pipeline (1d → 2a → 2b).
+"""RQ job handlers for the document ingestion pipeline (1d → 2a → 2b → 2c → 2d).
 
 After storage ack, stub extraction JSON is **Pydantic-validated** (2b) before JSONB
 insert. Validation failures raise ``ExtractionPayloadValidationError``; the worker
-maps any exception to ``failed`` + ``processing_error`` (no repair). Idempotent for
-already-``extracted`` rows (no-op).
+maps any exception to ``failed`` + ``processing_error`` (no repair). A **normalized
+bill** (``bills`` + ``bill_line_items``) is upserted from the latest extraction (2c/2d).
+Idempotent for already-``extracted`` rows (no-op).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_session_factory
 from app.models.document import Document
+from app.services.bill_sync import upsert_bill_for_document
 from app.services.raw_extraction import persist_stub_raw_extraction
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,8 @@ def process_document_pipeline(document_id: str) -> None:
             doc.processing_error = None
             doc.processing_status = PROCESSING_RECEIVED
             session.flush()
-            persist_stub_raw_extraction(session, document=doc)
+            raw_row = persist_stub_raw_extraction(session, document=doc)
+            upsert_bill_for_document(session, document=doc, raw_extraction=raw_row)
             session.commit()
             logger.info("document_jobs: id=%s -> %s", document_id, PROCESSING_EXTRACTED)
         except Exception as exc:

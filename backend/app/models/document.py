@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
+    from app.models.bill import Bill
     from app.models.document_raw_extraction import DocumentRawExtraction
     from app.models.organization import Organization
     from app.models.site import Site
@@ -91,4 +92,9 @@ class Document(Base):
         "DocumentRawExtraction",
         back_populates="document",
         cascade="all, delete-orphan",
+    )
+    bill: Mapped[Optional["Bill"]] = relationship(
+        "Bill",
+        back_populates="document",
+        uselist=False,
     )

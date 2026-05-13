@@ -3,9 +3,8 @@
 Payloads pass strict Pydantic validation (step **2b**) before JSONB insert; there is
 no repair path—invalid data raises and the worker marks ``failed``.
 
-The worker calls this after marking ``received`` so extraction failures can be
-distinguished from ingestion failures via ``documents.processing_status`` /
-``processing_error``.
+Optional ``draft_lines`` on ``stub-v1`` feed **2c** normalization and **2d** bill
+rows via ``bill_sync`` in the worker after this function returns.
 """
 
 from __future__ import annotations
@@ -29,14 +28,27 @@ def persist_stub_raw_extraction(session: Session, *, document: Document) -> Docu
     """Build stub dict, **validate** (2b), insert JSONB row, set ``extracted``.
 
     ``raw_payload`` stores the validated ``model_dump(mode="json")`` snapshot only.
+    Returns the new row so callers (worker ``bill_sync``) can attach ``bills.raw_extraction_id``.
     """
     settings = get_settings()
     model_id = settings.raw_extraction_stub_model_id
     candidate: dict[str, Any] = {
         "stub": True,
-        "message": "No frontier LLM wired yet; 2a persistence only.",
+        "message": "No frontier LLM wired yet; 2a persistence + optional draft lines for 2c/2d.",
         "document_id": str(document.id),
         "mime_type": document.mime_type,
+        "spend_domain": "utility",
+        "spend_kind": "electricity",
+        "draft_lines": [
+            {
+                "raw_label": "Electricity delivery (sample)",
+                "amount": 142.5,
+                "currency": "USD",
+                "quantity": 950.0,
+                "quantity_unit": "kwh",
+                "service_hint": "electric",
+            },
+        ],
     }
     raw_payload = validate_raw_extraction_payload(
         candidate,
