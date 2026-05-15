@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from app.models.anomaly import Anomaly
     from app.models.bill_line_item import BillLineItem
     from app.models.document import Document
     from app.models.document_raw_extraction import DocumentRawExtraction
@@ -87,4 +88,9 @@ class Bill(Base):
         back_populates="bill",
         cascade="all, delete-orphan",
         order_by="BillLineItem.position",
+    )
+    anomalies: Mapped[list["Anomaly"]] = relationship(
+        "Anomaly",
+        back_populates="bill",
+        foreign_keys="Anomaly.bill_id",
     )

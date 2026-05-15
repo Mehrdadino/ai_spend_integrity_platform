@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
+    from app.models.anomaly import Anomaly
     from app.models.bill import Bill
     from app.models.document_raw_extraction import DocumentRawExtraction
     from app.models.organization import Organization
@@ -104,3 +105,4 @@ class Document(Base):
         back_populates="document",
         uselist=False,
     )
+    anomalies: Mapped[list["Anomaly"]] = relationship("Anomaly", back_populates="document")

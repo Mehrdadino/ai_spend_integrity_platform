@@ -16,7 +16,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.config import get_settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
-from app.models import Bill, BillLineItem, Document, DocumentRawExtraction, Organization, Site, User  # noqa: E402, F401
+from app.models import (  # noqa: E402, F401
+    Anomaly,
+    Bill,
+    BillLineItem,
+    Document,
+    DocumentRawExtraction,
+    Organization,
+    Site,
+    User,
+)
 
 config = context.config
 if config.config_file_name is not None:

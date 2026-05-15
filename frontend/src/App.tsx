@@ -1,14 +1,6 @@
 /**
- * Phase 1 ingestion UI: presigned upload (1c) + document list with **processing_error**.
- * Document viewer keeps prior preview/bill visible during reprocess polling (stale-while-revalidate)
- * with a single pipeline spinner overlay instead of clearing sections.
- * and status (1h), plus a **document viewer** (preview + metadata) from list click,
- * upload result, or deep link ``?doc=<uuid>`` (requires ``X-Organization-Id``).
- * **Organizations** tab lists/creates tenants (no org header). **Reprocess** re-queues the worker.
- * While a document is ``queued`` / ``pending`` / ``received``, the viewer and bill refetch on a short interval (no full page reload).
- *
- * Upload stays disabled until **Organization ID** is filled (``X-Organization-Id``).
- * Prefill via ``VITE_ORG_ID`` in ``frontend/.env``.
+ * Phase 1 ingestion UI: presigned upload, document list, anomaly inbox, viewer (bill + comparison).
+ * Visual design: glass nav, gradient chrome, high-legibility type (Plus Jakarta Sans).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -20,7 +12,9 @@ import { createSite, fetchSitesList, type SiteResponse } from "./lib/sites";
 import {
   completeUpload,
   deleteDocument,
+  fetchAnomaliesList,
   fetchDocumentBill,
+  fetchDocumentComparison,
   fetchDocumentPriorBills,
   fetchDocumentViewer,
   fetchDocumentsList,
@@ -31,12 +25,14 @@ import {
   type BillResponse,
   type CompleteUploadResponse,
   type DocumentListItemResponse,
+  type AnomalyResponse,
+  type DocumentComparisonResponse,
   type DocumentPriorBillsResponse,
   type DocumentViewerResponse,
 } from "./lib/upload";
 
 type Phase = "idle" | "presigning" | "uploading" | "completing" | "done" | "error";
-type AppView = "upload" | "documents" | "organizations";
+type AppView = "upload" | "documents" | "anomalies" | "organizations";
 
 const defaultApiBase = "http://127.0.0.1:8000";
 
@@ -87,6 +83,20 @@ function formatBillPeriod(bill: BillResponse): string {
 
 function priorBillsSortedByPeriod(bills: BillResponse[]): BillResponse[] {
   return [...bills].sort((a, b) => billPeriodSortKey(b).localeCompare(billPeriodSortKey(a)));
+}
+
+/** Plain-language label for comparison rule severity (§3b UI). */
+function comparisonSeverityLabel(severity: string): string {
+  switch (severity) {
+    case "info":
+      return "Note";
+    case "warning":
+      return "Heads up";
+    case "critical":
+      return "Needs attention";
+    default:
+      return severity;
+  }
 }
 
 function storeSiteIdForOrg(orgId: string, siteId: string): void {
@@ -211,6 +221,9 @@ function DocumentViewerPanel({
   priorBills,
   priorBillsLoading,
   priorBillsError,
+  comparison,
+  comparisonLoading,
+  comparisonError,
 }: {
   headerDocumentId: string | null;
   viewer: DocumentViewerResponse | null;
@@ -239,6 +252,9 @@ function DocumentViewerPanel({
   priorBills?: BillResponse[] | null;
   priorBillsLoading?: boolean;
   priorBillsError?: string | null;
+  comparison?: DocumentComparisonResponse | null;
+  comparisonLoading?: boolean;
+  comparisonError?: string | null;
 }) {
   const showPanel =
     loading ||
@@ -506,6 +522,48 @@ function DocumentViewerPanel({
               )}
             </>
           ) : null}
+          {comparisonLoading || comparisonError || comparison !== undefined ? (
+            <div className="comparison-section" aria-live="polite">
+              <h4 className="comparison-title">Comparison insights</h4>
+              <p className="comparison-note">
+                We compare this bill to the <strong>previous</strong> one at the same site (automatic checks — no AI).
+                {comparison?.rule_pack_version ? (
+                  <>
+                    {" "}
+                    <span className="cell-mono">({comparison.rule_pack_version})</span>
+                  </>
+                ) : null}
+              </p>
+              {comparisonError ? <p className="error">{comparisonError}</p> : null}
+              {comparisonLoading ? (
+                <p className="comparison-loading">
+                  <span className="pipeline-spinner pipeline-spinner--inline" aria-hidden />
+                  Checking against your last bill…
+                </p>
+              ) : null}
+              {!comparisonLoading && comparison && comparison.findings.length === 0 && bill ? (
+                <p className="comparison-empty">
+                  All clear: nothing unusual vs your previous bill, or there isn&apos;t a prior bill at this site yet.
+                </p>
+              ) : null}
+              {!comparisonLoading && comparison && comparison.findings.length > 0 ? (
+                <ul className="comparison-findings">
+                  {comparison.findings.map((f) => (
+                    <li
+                      key={`${f.rule_id}-${f.title}`}
+                      className={`comparison-finding comparison-finding--${f.severity}`}
+                    >
+                      <span className={`comparison-severity comparison-severity--${f.severity}`}>
+                        {comparisonSeverityLabel(f.severity)}
+                      </span>
+                      <strong>{f.title}</strong>
+                      <p>{f.summary}</p>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
           {priorBillsLoading || priorBillsError || priorBills !== undefined ? (
             <div className="prior-bills-section">
               <h4 className="prior-bills-title">Prior bills (same site)</h4>
@@ -595,6 +653,12 @@ export function App() {
   const [priorBills, setPriorBills] = useState<BillResponse[] | undefined>(undefined);
   const [priorBillsLoading, setPriorBillsLoading] = useState(false);
   const [priorBillsError, setPriorBillsError] = useState<string | null>(null);
+  const [comparison, setComparison] = useState<DocumentComparisonResponse | null | undefined>(undefined);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [anomalyRows, setAnomalyRows] = useState<AnomalyResponse[]>([]);
+  const [anomalyListLoading, setAnomalyListLoading] = useState(false);
+  const [anomalyListError, setAnomalyListError] = useState<string | null>(null);
   /** Keep spinner visible from reprocess click until worker finishes and bill refetch settles. */
   const [pipelineHold, setPipelineHold] = useState(false);
   const loadedViewerDocIdRef = useRef<string | null>(null);
@@ -640,6 +704,8 @@ export function App() {
     setAssignSiteError(null);
     setPriorBills(undefined);
     setPriorBillsError(null);
+    setComparison(undefined);
+    setComparisonError(null);
     setPipelineHold(false);
     loadedViewerDocIdRef.current = null;
     loadedBillDocIdRef.current = null;
@@ -837,6 +903,51 @@ export function App() {
     viewerReloadNonce,
   ]);
 
+  /** Run §3b comparison when bill + site are available (same gate as prior bills). */
+  useEffect(() => {
+    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+      setComparison(undefined);
+      return;
+    }
+    const siteId = documentViewer?.site_id ?? documentBill?.site_id;
+    if (!siteId || !documentBill || documentViewer?.processing_status !== "extracted") {
+      setComparison(undefined);
+      setComparisonLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setComparisonLoading(true);
+    setComparisonError(null);
+    void fetchDocumentComparison(apiBase.trim(), orgId.trim(), selectedDocId)
+      .then((res) => {
+        if (!cancelled) {
+          setComparison(res);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setComparisonError(e instanceof Error ? e.message : String(e));
+          setComparison(undefined);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setComparisonLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedDocId,
+    orgId,
+    apiBase,
+    documentViewer?.site_id,
+    documentViewer?.processing_status,
+    documentBill,
+    viewerReloadNonce,
+  ]);
+
   const handleApplySiteToDocument = useCallback(async () => {
     if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
       return;
@@ -925,11 +1036,45 @@ export function App() {
     }
   }, [apiBase, orgId]);
 
+  const loadAnomalyList = useCallback(async () => {
+    if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+      setAnomalyRows([]);
+      setAnomalyListError(null);
+      return;
+    }
+    setAnomalyListError(null);
+    setAnomalyListLoading(true);
+    try {
+      const rows = await fetchAnomaliesList(apiBase.trim(), orgId.trim(), {
+        siteId: selectedSiteId || undefined,
+        limit: 200,
+      });
+      setAnomalyRows(rows);
+    } catch (e) {
+      setAnomalyListError(e instanceof Error ? e.message : String(e));
+      setAnomalyRows([]);
+    } finally {
+      setAnomalyListLoading(false);
+    }
+  }, [apiBase, orgId, selectedSiteId]);
+
   const goToDocuments = useCallback(() => {
     setView("documents");
     setSelectedDocId(docIdFromSearch());
     void loadDocumentList();
   }, [loadDocumentList]);
+
+  const goToAnomalies = useCallback(() => {
+    setView("anomalies");
+    closeViewer();
+  }, [closeViewer]);
+
+  useEffect(() => {
+    if (view !== "anomalies") {
+      return;
+    }
+    void loadAnomalyList();
+  }, [view, loadAnomalyList]);
 
   /** Poll viewer + bill while pipeline may still be running (no full-page reload). */
   useEffect(() => {
@@ -1017,6 +1162,14 @@ export function App() {
     replaceDocQuery(documentId);
   }, []);
 
+  const openAnomalyContext = useCallback(
+    (documentId: string) => {
+      setView("documents");
+      openDocumentInViewer(documentId);
+    },
+    [openDocumentInViewer],
+  );
+
   const handleReprocessSelected = useCallback(async () => {
     if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
       return;
@@ -1062,7 +1215,10 @@ export function App() {
     }
   }, [selectedDocId, orgId, apiBase, documentViewer?.document_id, closeViewer, view, loadDocumentList]);
 
-  const pageClass = view === "documents" || view === "organizations" ? "page page--wide" : "page";
+  const pageClass =
+    view === "documents" || view === "organizations" || view === "anomalies"
+      ? "page page--wide"
+      : "page";
   const pageWideWithViewer =
     view === "documents" &&
     (selectedDocId !== null ||
@@ -1104,40 +1260,75 @@ export function App() {
     priorBills,
     priorBillsLoading,
     priorBillsError,
+    comparison,
+    comparisonLoading,
+    comparisonError,
   };
 
   return (
     <div className={`${pageClass}${pageWideWithViewer ? " page--viewer" : ""}`}>
-      <header className="header">
+      <header className="app-header">
+        <div className="app-brand" aria-hidden="true">
+          <span className="app-brand-mark">Spend Integrity</span>
+          <span className="app-brand-tagline">Utility bill intelligence</span>
+        </div>
         <nav className="app-nav" aria-label="Primary">
-          <button type="button" className={view === "upload" ? "nav-btn nav-btn--active" : "nav-btn"} onClick={goToUpload}>
+          <button
+            type="button"
+            className={view === "upload" ? "nav-btn nav-btn--active" : "nav-btn"}
+            onClick={goToUpload}
+            aria-current={view === "upload" ? "page" : undefined}
+          >
             Upload
           </button>
-          <button type="button" className={view === "documents" ? "nav-btn nav-btn--active" : "nav-btn"} onClick={() => void goToDocuments()}>
+          <button
+            type="button"
+            className={view === "documents" ? "nav-btn nav-btn--active" : "nav-btn"}
+            onClick={() => void goToDocuments()}
+            aria-current={view === "documents" ? "page" : undefined}
+          >
             Documents
+          </button>
+          <button
+            type="button"
+            className={view === "anomalies" ? "nav-btn nav-btn--active" : "nav-btn"}
+            onClick={() => goToAnomalies()}
+            aria-current={view === "anomalies" ? "page" : undefined}
+          >
+            Anomalies
           </button>
           <button
             type="button"
             className={view === "organizations" ? "nav-btn nav-btn--active" : "nav-btn"}
             onClick={() => void goToOrganizations()}
+            aria-current={view === "organizations" ? "page" : undefined}
           >
             Organizations
           </button>
         </nav>
-        <h1>
-          {view === "upload" ? "Document upload" : view === "documents" ? "Ingestion status" : "Organizations"}
+        <h1 className="app-title">
+          {view === "upload"
+            ? "Upload a bill"
+            : view === "documents"
+              ? "Your documents"
+              : view === "anomalies"
+                ? "Anomaly inbox"
+                : "Organizations"}
         </h1>
         <p className="lede">
           {view === "upload"
-            ? "Utility bills and related PDFs — presigned flow (dev)."
+            ? "Add a PDF utility bill — we extract line items, compare to last month at the same site, and highlight anything worth a second look."
             : view === "documents"
-              ? "Pipeline state per document. Click a row for preview and metadata. Newest first."
-              : "List tenants (UUID + slug) and create new ones for local dev — no auth on these API routes yet."}
+              ? "Track processing, open the PDF and extracted bill, assign a site, and see insights next to prior months."
+              : view === "anomalies"
+                ? "Saved comparison signals across your organization. Open a document from a row to review the bill context. Pick a site under Connection to narrow the list."
+                : "Create dev workspaces and copy organization IDs. Authentication is not wired to these routes yet."}
         </p>
       </header>
 
       <section className="card">
         <h2>Connection</h2>
+        <p className="card-subtitle">Point the app at your API and choose which organization you’re working in.</p>
         <label className="field">
           <span>API base URL</span>
           <input
@@ -1225,7 +1416,8 @@ export function App() {
       {view === "upload" && (
         <>
           <section className="card">
-            <h2>File</h2>
+            <h2>Send your file</h2>
+            <p className="card-subtitle">PDFs go straight to secure storage, then the worker extracts and normalizes the bill.</p>
             {selectedSiteId && siteRows.some((s) => s.id === selectedSiteId) ? (
               <p className="hint">
                 Uploads will use site: <strong>{siteRows.find((s) => s.id === selectedSiteId)?.name}</strong>
@@ -1261,12 +1453,14 @@ export function App() {
             {submitBlockedReason ? <p className="upload-hint">{submitBlockedReason}</p> : null}
             {phase !== "idle" && phase !== "error" ? (
               <div className="progress-wrap" aria-live="polite">
-                <div
-                  className="progress-bar"
-                  style={{
-                    width: `${phase === "uploading" ? uploadPct : phase === "done" ? 100 : phase === "completing" ? 92 : 8}%`,
-                  }}
-                />
+                <div className="progress-track">
+                  <div
+                    className="progress-bar"
+                    style={{
+                      width: `${phase === "uploading" ? uploadPct : phase === "done" ? 100 : phase === "completing" ? 92 : 8}%`,
+                    }}
+                  />
+                </div>
                 <p className="status">{message}</p>
               </div>
             ) : null}
@@ -1275,7 +1469,8 @@ export function App() {
 
           {result ? (
             <section className="card success">
-              <h2>Result</h2>
+              <h2>Done</h2>
+              <p className="card-subtitle">Your upload is registered. Open it below or jump to the full list.</p>
               <dl className="kv">
                 <dt>Document ID</dt>
                 <dd>
@@ -1335,11 +1530,14 @@ export function App() {
         <div className="doc-layout">
           <section className="card doc-layout-list">
             <div className="doc-list-toolbar">
-              <h2>Documents</h2>
+              <h2>All uploads</h2>
               <button type="button" disabled={docListLoading} onClick={() => void loadDocumentList()}>
                 {docListLoading ? "Loading…" : "Refresh"}
               </button>
             </div>
+            <p className="doc-list-lede">
+              Newest first. Click a row to preview the file and review the extracted bill.
+            </p>
             {docListError ? <p className="error">{docListError}</p> : null}
             {!docListError && !docListLoading && docRows.length === 0 ? (
               <p className="hint">No documents yet for this organization.</p>
@@ -1411,13 +1609,79 @@ export function App() {
           />
         </div>
       )}
+      {view === "anomalies" && (
+        <section className="card">
+          <div className="doc-list-toolbar">
+            <h2>Saved comparison signals</h2>
+            <button type="button" disabled={anomalyListLoading} onClick={() => void loadAnomalyList()}>
+              {anomalyListLoading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+          <p className="doc-list-lede">
+            Rows are written when you open a document and the app runs §3b comparison (
+            <code>/bill/comparison</code>). Use the site picker under Connection to filter this list.
+          </p>
+          {anomalyListError ? <p className="error">{anomalyListError}</p> : null}
+          {!anomalyListError && !anomalyListLoading && anomalyRows.length === 0 ? (
+            <p className="hint">
+              No anomalies yet. Normalize at least one bill per document, then view it (with an assigned site) so comparison
+              runs and persists rows here.
+            </p>
+          ) : null}
+          {anomalyRows.length > 0 ? (
+            <div className="table-wrap">
+              <table className="doc-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Severity</th>
+                    <th>Rule</th>
+                    <th>Site</th>
+                    <th>Summary</th>
+                    <th>Document</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {anomalyRows.map((row) => (
+                    <tr
+                      key={row.id}
+                      className="doc-table__row"
+                      onClick={() => openAnomalyContext(row.document_id)}
+                      onKeyDown={(ev) => {
+                        if (ev.key === "Enter" || ev.key === " ") {
+                          ev.preventDefault();
+                          openAnomalyContext(row.document_id);
+                        }
+                      }}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`Open document for anomaly ${row.id}`}
+                    >
+                      <td>{new Date(row.updated_at).toLocaleString()}</td>
+                      <td>
+                        <span className={`comparison-severity comparison-severity--${row.severity}`}>
+                          {comparisonSeverityLabel(row.severity)}
+                        </span>
+                      </td>
+                      <td className="cell-mono">{row.rule_id}</td>
+                      <td>{row.site_name ?? (row.site_id ? row.site_id : "—")}</td>
+                      <td>{row.summary}</td>
+                      <td className="cell-mono cell-id">{row.document_id}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
+      )}
       {view === "organizations" && (
         <>
           <section className="card">
-            <h2>Create organization</h2>
-            <p className="hint">
-              Slug must look like <code>acme-corp</code> (letters, digits, single hyphens). The scratch field is UI-only
-              (not stored).
+            <h2>New workspace</h2>
+            <p className="card-subtitle">
+              Slug is used in URLs and must look like <code>acme-corp</code>. The scratch label is only for your notes in
+              this form.
             </p>
             <label className="field">
               <span>Display name</span>
@@ -1458,11 +1722,12 @@ export function App() {
           </section>
           <section className="card">
             <div className="doc-list-toolbar">
-              <h2>Tenants</h2>
+              <h2>Existing workspaces</h2>
               <button type="button" disabled={orgListLoading} onClick={() => void loadOrganizationsList()}>
                 {orgListLoading ? "Loading…" : "Refresh"}
               </button>
             </div>
+            <p className="doc-list-lede">Copy a UUID into Connection → Organization ID to use that tenant.</p>
             {orgListError ? <p className="error">{orgListError}</p> : null}
             {!orgListError && !orgListLoading && orgRows.length === 0 ? <p className="hint">No organizations yet.</p> : null}
             {orgRows.length > 0 ? (

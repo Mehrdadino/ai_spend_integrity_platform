@@ -29,3 +29,4 @@ class Site(Base):
     organization: Mapped["Organization"] = relationship("Organization", back_populates="sites")
     documents: Mapped[list["Document"]] = relationship("Document", back_populates="site")
     bills: Mapped[list["Bill"]] = relationship("Bill", back_populates="site")
+    anomalies: Mapped[list["Anomaly"]] = relationship("Anomaly", back_populates="site")

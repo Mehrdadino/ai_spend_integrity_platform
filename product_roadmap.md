@@ -20,28 +20,29 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-14
+## Implementation status (repository) — 2026-05-15
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
 ### Built so far (Phase 1 — ingestion + normalization shell)
 
 - **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO**, **Redis + RQ**, **Vite + React + TypeScript** UI. Docker Compose runs Postgres, MinIO, and Redis locally.
-- **Document ingestion:** presigned upload + CLI; **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs.
+- **Document ingestion:** presigned upload + CLI; **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs. **Anomalies** tab lists persisted comparison signals (**§3d**).
 - **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), falls back to **Tesseract OCR** for scan-only PDFs / image MIME types, optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**).
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
 - **Auth:** development-style **organization UUID header** only.
 - **§3a prior bills:** `list_bills_for_site` / `get_prior_bills_for_bill` + **`GET /api/v1/documents/{id}/bill/prior-bills`** (same-org, same-`site_id`; period ordering in eng **3a**).
+- **§3b + §3d:** **`GET …/bill/comparison`** (MoM, new fees, header mismatch) and **`GET /api/v1/anomalies`**; findings persist automatically when comparison runs (**Anomalies** tab + site filter from Connection).
 - **Document soft delete:** `deleted_at` + **`DELETE /api/v1/documents/{id}`** + UI **Delete** (hard delete / purge later).
 
 ### Still to build for Phase 1 MVP
 
-**Historical comparison** (§3), **explainability** (§4), **review workflow** (§5), and production auth — plus the full “upload → anomaly insight” loop on **real** structured bills across periods.
+**Remaining Phase 1 comparison breadth** (**§3c** site-to-site when needed, **§3e** comparison backfill at scale), **explainability** (§4), **review workflow** (§5), and production auth — plus hardening on **real** structured bills across long histories.
 
 ### Recommended next focus (product ↔ eng)
 
-- **§3b** — code-first comparison rules (MoM deltas, new fee lines) on top of **3a** prior-bill queries.
-- **§3d** — persist **`anomalies`** and surface them in the UI (first “useful insight” loop).
+- **§3e / §3c** — backfill comparisons when older bills arrive; optional site-to-site rules when categories align.
+- **§4** — grounded explanations atop persisted **`anomalies`** (+ stored metrics/evidence snapshots).
 
 ### Deferred / optional (later — not blocking MVP demo)
 

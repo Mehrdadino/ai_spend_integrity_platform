@@ -3,7 +3,7 @@
 All routes require ``X-Organization-Id`` matching an organization UUID.
 
 Static paths (``presigned-upload``) and sub-resources (``read-url``, ``viewer``, ``bill``,
-``bill/prior-bills``, ``reprocess``) are registered before bare ``GET /{document_id}`` so path segments are not
+``bill/prior-bills``, ``bill/comparison``, ``reprocess``) are registered before bare ``GET /{document_id}`` so path segments are not
 parsed as UUIDs where inappropriate. The collection route ``GET ""`` must stay
 before ``GET /{document_id}``.
 """
@@ -24,6 +24,8 @@ from app.repositories.bills import get_bill_for_org_document, get_prior_bills_fo
 from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
 from app.repositories.documents import get_document_for_organization, list_documents_for_organization
 from app.schemas.bills import BillResponse, DocumentBillResponse, DocumentPriorBillsResponse
+from app.schemas.comparison import DocumentComparisonResponse
+from app.services.comparison.evaluate import evaluate_document_comparison
 from app.services.comparison.period import BILL_ORDERING_NOTE
 from app.services.document_site import DocumentSiteAssignmentError, assign_site_to_document
 from app.schemas.documents import (
@@ -230,6 +232,25 @@ def get_document_bill(
     return DocumentBillResponse(
         document_id=document_id,
         bill=BillResponse.model_validate(bill),
+    )
+
+
+@router.get("/{document_id}/bill/comparison", response_model=DocumentComparisonResponse)
+def get_document_bill_comparison(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> DocumentComparisonResponse:
+    """Run §3b rule pack v1 (MoM total, new fees, header mismatch) vs immediate prior bill."""
+    doc = get_document_for_organization(
+        db, document_id=document_id, organization_id=org.id
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return evaluate_document_comparison(
+        db,
+        organization_id=org.id,
+        document_id=document_id,
     )
 
 

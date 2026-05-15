@@ -126,6 +126,47 @@ export interface DocumentPriorBillsResponse {
   prior_bills: BillResponse[];
 }
 
+/** One §3b rule hit (persisted as §3d ``anomalies`` when comparison runs). */
+export interface ComparisonFindingResponse {
+  rule_id: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  summary: string;
+  evidence: Record<string, unknown>;
+}
+
+/** ``GET …/bill/comparison`` — deterministic MoM / fee / header checks; also refreshes §3d rows. */
+export interface DocumentComparisonResponse {
+  document_id: string;
+  bill_id: string | null;
+  site_id: string | null;
+  rule_pack_version: string;
+  compared_to_bill_id: string | null;
+  compared_to_period_end: string | null;
+  findings: ComparisonFindingResponse[];
+}
+
+/** One persisted comparison signal (``GET /api/v1/anomalies``). */
+export interface AnomalyResponse {
+  id: string;
+  organization_id: string;
+  site_id: string | null;
+  site_name: string | null;
+  document_id: string;
+  bill_id: string;
+  bill_line_item_id: string | null;
+  compared_to_bill_id: string | null;
+  rule_pack_version: string;
+  rule_id: string;
+  period_end: string | null;
+  severity: string;
+  title: string;
+  summary: string;
+  evidence: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PatchDocumentSiteResponse {
   document_id: string;
   site_id: string | null;
@@ -278,6 +319,42 @@ export async function fetchDocumentBill(
     throw new Error(`Document bill failed (${res.status}): ${body}`);
   }
   return res.json() as Promise<DocumentBillResponse>;
+}
+
+/** Run §3b comparison rules for the current bill vs immediate prior. */
+export async function fetchDocumentComparison(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+): Promise<DocumentComparisonResponse> {
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill/comparison`, {
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Bill comparison failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<DocumentComparisonResponse>;
+}
+
+/** §3d anomaly inbox (newest first); optional ``siteId`` filter. */
+export async function fetchAnomaliesList(
+  apiBase: string,
+  orgId: string,
+  opts?: { siteId?: string | null; limit?: number },
+): Promise<AnomalyResponse[]> {
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 100) });
+  if (opts?.siteId) {
+    params.set("site_id", opts.siteId);
+  }
+  const res = await fetch(`${apiBase}/api/v1/anomalies?${params}`, {
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Anomalies list failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<AnomalyResponse[]>;
 }
 
 /** Older bills for the same site (§3a). */

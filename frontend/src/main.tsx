@@ -1,5 +1,5 @@
 /**
- * React root — minimal entry for the upload UI (step 1c).
+ * React root — document ingestion, anomaly inbox, and comparison dashboard (Vite + React).
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

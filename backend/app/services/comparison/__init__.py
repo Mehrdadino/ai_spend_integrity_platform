@@ -1,6 +1,7 @@
-"""Historical comparison helpers (§3): period ordering and prior-bill selection (3a).
+"""Historical comparison (§3): prior-bill queries (3a), rule pack evaluation (3b), §3d persistence.
 
-Rule packs (**3b**) and anomaly persistence (**3d**) build on these primitives.
+Import ``evaluate_document_comparison`` from ``app.services.comparison.evaluate`` rather than this
+package to avoid a circular import with ``app.repositories.bills``.
 """
 
 from app.services.comparison.period import (

@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-14 (document soft delete + §3a prior bills)  
+**Last updated:** 2026-05-15 (§3d anomalies persistence)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -18,22 +18,24 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | Area | What exists today |
 |------|---------------------|
 | **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**). |
-| **Backend (`backend/`)** | FastAPI; Alembic through **`006_bills`**; ORM: orgs, sites, documents, **`document_raw_extractions`**, **`bills`**, **`bill_line_items`**. *Not yet:* `anomalies`, review audit. |
+| **Backend (`backend/`)** | FastAPI; Alembic through **`008_anomalies`**; ORM: orgs, sites, documents, **`document_raw_extractions`**, **`bills`**, **`bill_line_items`**, **`anomalies`**. *Not yet:* review audit. |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
 | **1b** | Documents API + **`GET/POST /api/v1/organizations`** (dev admin). Tenant = **`X-Organization-Id`** on document routes. |
-| **1c** | **`frontend/`** Upload, **Documents**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**. |
+| **1c** | **`frontend/`** Upload, **Documents**, **Anomalies**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**. |
 | **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess. |
 | **1h** | List + detail + **`processing_error`**; latest raw extraction on detail. |
 | **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional **Tesseract OCR** for scan-only PDFs / images → optional LLM → **`generic-bill-v1`** JSONB. |
 | **2b** | Strict Pydantic for **`stub-v1`** and **`generic-bill-v1`** (**``extra=forbid``**). |
 | **2c–2d** | Normalization + transactional **`bills` / `bill_line_items`** upsert; **`GET …/bill`**. |
 | **3a** | Prior-bill queries: `app/services/comparison/period.py`, `app/repositories/bills.py` (`list_bills_for_site`, `get_prior_bills_for_bill`), **`GET …/bill/prior-bills`**. |
+| **3b** | Rule pack v1: `rule_pack_v1.py` (MoM total, new fee lines, header mismatch); **`GET …/bill/comparison`**; UI **Comparison insights**. |
+| **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`**; replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab (site filter via Connection picker). |
 | **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete** button (hidden from list). |
 | **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
 
 ### Not started (still Phase 1 product scope)
 
-- **§3b–3e:** rule pack, site-to-site, anomaly persistence, comparison backfill.
+- **§3c–3e:** site-to-site, comparison backfill / scale.
 - **§4–5:** explainability, review workflow.
 - **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
 
@@ -53,9 +55,9 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ### Suggested “resume here” order
 
-1. **§3b** — rule pack v1 (code-first) using **3a** prior bills.  
-2. **§3d** — `anomalies` table + API + UI list.  
-3. **§4** — template explainability from stored metrics.
+1. **§3e** — comparison backfill / optimized prior-bill SQL when late bills land (**3c** optional in parallel).  
+2. **§4** — template explainability from stored metrics + anomaly rows.  
+3. **§5** — review workflow on persisted anomalies.
 
 ---
 
@@ -117,7 +119,7 @@ Each **product milestone** below is split into **independent engineering steps**
 | **3a — “Prior bill for site + period” queries** | Repository functions / SQL; define “period” and ordering rules. | No anomaly rows yet; used by tests and **3b**. |
 | **3b — Rule pack v1 (code-first)** | MoM deltas, new fee lines, simple thresholds; deterministic outputs + evidence structs. | Table-driven rules file is fine; no LLM. |
 | **3c — Site-to-site comparables** | Only where categories/units align; explicit “not comparable” outcomes. | Can ship after **3b** if you gate on schema flags. |
-| **3d — `anomalies` persistence** | Insert/update anomalies with pointers to `bill_line_item_id`s or metric keys; dedupe on `(site_id, type, period, fingerprint)`. | Explainability (**4**) reads these rows + stored metrics. |
+| **3d — `anomalies` persistence** | **Shipped:** `anomalies` + partial unique indexes; ``GET /api/v1/anomalies``; upsert on ``GET …/bill/comparison`` (delete+insert per ``bill_id`` + ``rule_pack_version``); fee rules expand to per-line rows with ``bill_line_item_id``. | Explainability (**4**) reads these rows + stored metrics. |
 | **3e — Re-run / backfill job** | When a new bill lands, re-evaluate open windows (e.g. last N periods). | Isolated worker task; decouples from upload path latency. |
 
 ---
