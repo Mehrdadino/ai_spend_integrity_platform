@@ -268,7 +268,30 @@ function DocumentViewerPanel({
                 </dd>
                 <dt>Normalization</dt>
                 <dd className="cell-mono">{bill.normalization_version}</dd>
+                {bill.summary?.structured_via ? (
+                  <>
+                    <dt>Structured via</dt>
+                    <dd className="cell-mono">{String(bill.summary.structured_via)}</dd>
+                  </>
+                ) : null}
+                {bill.summary?.text_char_count != null && bill.summary?.text_char_count !== undefined ? (
+                  <>
+                    <dt>PDF text (embedded)</dt>
+                    <dd>
+                      {String(bill.summary.text_char_count)} chars
+                      {bill.summary.text_extraction_method ? (
+                        <span className="hint"> · {String(bill.summary.text_extraction_method)}</span>
+                      ) : null}
+                    </dd>
+                  </>
+                ) : null}
               </dl>
+              {bill.summary?.structured_note ? (
+                <p className="hint bill-structured-note">{String(bill.summary.structured_note)}</p>
+              ) : null}
+              {bill.summary?.text_needs_ocr === true ? (
+                <p className="error">This file likely needs OCR (no embedded text layer).</p>
+              ) : null}
               {bill.line_items.length > 0 ? (
                 <div className="table-wrap bill-table-wrap">
                   <table className="bill-table">

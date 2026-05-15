@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     extraction_llm_model: str = "gpt-4o-mini"
     extraction_llm_timeout_seconds: int = 90
 
+    # PDF embedded-text extraction (pypdf) before LLM structuring; OCR is a separate future path.
+    extraction_text_min_chars_total: int = 40
+    extraction_text_min_chars_per_page: int = 25
+    extraction_llm_max_document_chars: int = 24_000
+
 
 @lru_cache
 def get_settings() -> Settings:

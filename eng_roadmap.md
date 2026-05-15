@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-13  
+**Last updated:** 2026-05-14  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -18,26 +18,27 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | Area | What exists today |
 |------|---------------------|
 | **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**). |
-| **Backend (`backend/`)** | FastAPI; Alembic through **`005_drop_ingest_token`** (removes org ingest token); **`document_raw_extractions`** (JSONB + `model_id` / `extraction_version` / `created_at`); **`documents.processing_error`** (worker failure text). ORM: orgs, users, sites, documents, raw extractions. *Not yet:* `bills`, `bill_line_items`, `anomalies`, review audit. |
+| **Backend (`backend/`)** | FastAPI; Alembic through **`006_bills`**; ORM: orgs, sites, documents, **`document_raw_extractions`**, **`bills`**, **`bill_line_items`**. *Not yet:* `anomalies`, review audit. |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
-| **1b** | `GET /api/v1/documents` (list + `processing_error`), `POST …/presigned-upload`, `POST …/{id}/complete-upload`, `GET …/{id}`, `GET …/{id}/viewer` (detail + presigned read URL). Tenant = **`X-Organization-Id`**. |
-| **1c** | **`frontend/`** Upload + **Documents** tabs; list shows **Error** column; status styling for `extracted` / `failed`. |
-| **1d** | **Redis + RQ** + **`document-worker`**: `queued` → `received` → **stub raw extraction row** → **`extracted`**; on exception → **`failed`** + **`processing_error`**. |
-| **1h** | List + detail surface **`processing_error`**; GET detail embeds latest **2a** snapshot. |
-| **2a (stub)** | Worker persists append-only **`document_raw_extractions`**; JSONB holds **Pydantic-validated** ``model_dump`` (``stub-v1``); real LLM TBD. |
-| **2b** | **Strict Pydantic** for ``stub-v1`` payloads (**``extra=forbid``**); mismatch / unknown version → ``ExtractionPayloadValidationError`` → worker ``failed`` (no repair). ``unittest`` in ``backend/tests/``. |
-| **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`register-document`**; **`scripts/dev.sh`**, **`bootstrap-backend-venv.sh`**. |
+| **1b** | Documents API + **`GET/POST /api/v1/organizations`** (dev admin). Tenant = **`X-Organization-Id`** on document routes. |
+| **1c** | **`frontend/`** Upload, **Documents**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**. |
+| **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess. |
+| **1h** | List + detail + **`processing_error`**; latest raw extraction on detail. |
+| **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional LLM → **`generic-bill-v1`** JSONB; scan-only PDFs fail (OCR TBD). |
+| **2b** | Strict Pydantic for **`stub-v1`** and **`generic-bill-v1`** (**``extra=forbid``**). |
+| **2c–2d** | Normalization + transactional **`bills` / `bill_line_items`** upsert; **`GET …/bill`**. |
+| **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
 
 ### Not started (still Phase 1 product scope)
 
-- **§2 (beyond 2a–2b stub path):** canonical enums (**2c**), relational `bills` / `bill_line_items` (**2d**).  
+- **OCR** for image / scan-only PDFs (`document_text.needs_ocr`).  
 - **§3–5:** comparison, explainability, review.  
 - **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
 
 ### Suggested “resume here” order
 
-1. **2c–2d** — normalization functions + relational bill writes (and register Pydantic for the first real LLM schema when wired).  
-2. **§3** — comparison once **2d** exists for two+ periods.
+1. **§3** — comparison rules once two+ structured bills exist per site (enable **`EXTRACTION_LLM_API_KEY`** for real line items).  
+2. **OCR** — optional provider when `text_needs_ocr`.
 
 ---
 

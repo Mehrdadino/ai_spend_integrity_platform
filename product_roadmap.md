@@ -20,26 +20,26 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-13
+## Implementation status (repository) — 2026-05-14
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
-### Built so far (Phase 1 — ingestion shell + list UI)
+### Built so far (Phase 1 — ingestion + normalization shell)
 
-- **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO** (S3-compatible file storage), **Redis + RQ** for a first background job after upload, **Vite + React + TypeScript** UI under `frontend/`. Docker Compose runs Postgres, MinIO, and Redis locally.
-- **Document ingestion:** browser (presigned PUT) or **CLI** (`register-document`) gets a file into **object storage** + **Postgres** (`documents` with hash, size, MIME, `source`, `processing_status`). **Presigned upload** + **upload UI** + **read-back** by id and a **viewer** endpoint with presigned GET for preview.
-- **Ingestion status (step 1h):** **`GET /api/v1/documents`** lists org documents (newest first); frontend **Documents** tab shows pipeline status, **`processing_error`** when the worker sets **`failed`**, source, MIME, size, and timestamps. GET detail includes the latest **raw extraction** snapshot when present.
-- **Background pipeline:** after upload finalize, **RQ** runs **`process_document_pipeline`**: **`queued`** → **`received`** → **Pydantic-validated** stub payload (**2b**) → append-only **`document_raw_extractions`** (**2a**) → **`extracted`**; failures (validation or other) set **`failed`** + **`processing_error`**.
-- **Auth:** development-style **organization UUID header** only; not production multi-tenant auth.
+- **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO**, **Redis + RQ**, **Vite + React + TypeScript** UI. Docker Compose runs Postgres, MinIO, and Redis locally.
+- **Document ingestion:** presigned upload + CLI; **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs.
+- **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**). Scanned PDFs with no text layer **fail** with a clear error (OCR not yet implemented).
+- **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
+- **Auth:** development-style **organization UUID header** only.
 
-### Still to build for Phase 1 MVP (unchanged intent)
+### Still to build for Phase 1 MVP
 
-Everything under **“You SHOULD Build”** below that is **not** covered above: **structured normalization** beyond validated raw JSON (**2c–2d**), **historical comparison**, **explainability**, **review workflow** — plus the “upload → anomaly insight” loop that depends on those layers.
+**Historical comparison** (§3), **explainability** (§4), **review workflow** (§5), production auth, and **OCR** for scan-only uploads — plus the full “upload → anomaly insight” loop on **real** structured bills across periods.
 
 ### Recommended next focus (product ↔ eng)
 
-- **2c–2d:** canonical codes + relational **`bills` / `bill_line_items`** (see **`eng_roadmap.md`**).  
-- **Wire a real extractor:** add a new ``extraction_version`` + Pydantic model and call a frontier LLM before the same validate → insert path (still **no repair** unless product changes).
+- **§3 comparison** once you have two+ real bills per site (requires **`EXTRACTION_LLM_API_KEY`** or future rules parser for structuring).
+- **OCR path** for `text_needs_ocr` documents (images / scanned PDFs).
 
 ---
 

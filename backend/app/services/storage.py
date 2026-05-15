@@ -118,3 +118,10 @@ def sha256_and_size_from_object(*, bucket: str, key: str) -> tuple[str, int]:
         h.update(chunk)
         total += len(chunk)
     return h.hexdigest(), total
+
+
+def get_document_object_bytes(*, bucket: str, key: str) -> bytes:
+    """Load full object bytes from S3/MinIO (worker text extraction / future OCR)."""
+    client = get_s3_client()
+    resp = client.get_object(Bucket=bucket, Key=key)
+    return resp["Body"].read()

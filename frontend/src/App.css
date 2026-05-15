@@ -85,6 +85,14 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.bill-header-kv {
+  margin-bottom: 0.75rem;
+}
+
+.bill-structured-note {
+  margin: 0 0 0.75rem;
+}
+
 .bill-section-title {
   margin: 0 0 0.65rem;
   font-size: 0.95rem;

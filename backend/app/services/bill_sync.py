@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,9 +29,14 @@ def upsert_bill_for_document(
     *,
     document: Document,
     raw_extraction: DocumentRawExtraction,
+    summary_extra: dict[str, Any] | None = None,
 ) -> Bill:
     """Delete any prior bill for ``document``, insert header + line items from 2c."""
     bundle = build_normalized_bundle(document=document, raw_row=raw_extraction)
+    if summary_extra:
+        merged = dict(bundle.summary)
+        merged.update(summary_extra)
+        bundle.summary = merged
 
     existing = session.scalar(select(Bill).where(Bill.document_id == document.id))
     if existing is not None:

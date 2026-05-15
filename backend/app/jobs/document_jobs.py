@@ -1,11 +1,10 @@
 """RQ job handlers for the document ingestion pipeline (1d → 2a → 2b → 2c → 2d).
 
-After storage ack, raw extraction JSON (**``generic-bill-v1``**; optional LLM) is
-**Pydantic-validated** (2b) before JSONB insert. Validation failures raise
-``ExtractionPayloadValidationError``; the worker maps any exception to ``failed`` +
-``processing_error`` (no repair). A **normalized bill** (``bills`` + ``bill_line_items``)
-is upserted from the latest extraction (2c/2d). Idempotent for already-``extracted``
-rows (no-op).
+Loads the PDF from S3, extracts **embedded text** (``pypdf``), optionally structures via
+LLM, **Pydantic-validates** (2b), inserts JSONB, then upserts normalized bills (2c/2d).
+Scanned PDFs with no text layer fail with a clear ``processing_error`` (OCR TBD).
+Validation failures raise ``ExtractionPayloadValidationError``; the worker maps any
+exception to ``failed`` + ``processing_error`` (no repair).
 """
 
 from __future__ import annotations
@@ -64,8 +63,13 @@ def process_document_pipeline(document_id: str) -> None:
             doc.processing_error = None
             doc.processing_status = PROCESSING_RECEIVED
             session.flush()
-            raw_row = persist_raw_extraction_for_document(session, document=doc)
-            upsert_bill_for_document(session, document=doc, raw_extraction=raw_row)
+            raw_row, provenance = persist_raw_extraction_for_document(session, document=doc)
+            upsert_bill_for_document(
+                session,
+                document=doc,
+                raw_extraction=raw_row,
+                summary_extra=provenance,
+            )
             session.commit()
             logger.info("document_jobs: id=%s -> %s", document_id, PROCESSING_EXTRACTED)
         except Exception as exc:

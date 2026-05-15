@@ -5,8 +5,8 @@ matching ``GenericBillExtractionPayload``. Uses stdlib **urllib** only (no extra
 HTTP dependency). If the HTTP call or JSON parse fails, ``raw_extraction`` falls
 back to a deterministic payload.
 
-Tenancy: the model never receives cross-tenant identifiers beyond ``document_id``
-and MIME type; expand with redacted OCR text when available.
+Bill **text** comes from ``document_text`` (``pypdf`` embedded layer) when available;
+OCR is not invoked here.
 """
 
 from __future__ import annotations
@@ -20,13 +20,15 @@ from typing import Any
 
 from app.config import Settings
 from app.models.document import Document
+from app.services.document_text import truncate_text_for_llm
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
     "You are a billing-data extraction assistant. Reply with a single JSON object only, "
-    "no markdown fences, matching the user's schema. If you lack bill text, return "
-    "an empty lines array and conservative spend_domain hints (e.g. unspecified)."
+    "no markdown fences, matching the user's schema. Extract line items, amounts, currency, "
+    "issuer, and spend hints from the bill text when provided. If bill text is missing or "
+    "unreadable, return an empty lines array and conservative spend_domain hints."
 )
 
 
@@ -39,7 +41,12 @@ def _strip_json_fences(text: str) -> str:
     return t
 
 
-def llm_generic_bill_dict(*, document: Document, settings: Settings) -> dict[str, Any]:
+def llm_generic_bill_dict(
+    *,
+    document: Document,
+    settings: Settings,
+    document_text: str | None = None,
+) -> dict[str, Any]:
     """POST to OpenAI-compatible ``/chat/completions``; return a dict (not yet validated).
 
     Raises on non-2xx or invalid JSON so callers can fall back to deterministic extraction.
@@ -52,15 +59,27 @@ def llm_generic_bill_dict(*, document: Document, settings: Settings) -> dict[str
     url = f"{base}/chat/completions"
     model = (settings.extraction_llm_model or "gpt-4o-mini").strip()
 
-    user = (
-        f"Document UUID: {document.id}\n"
-        f"MIME type: {document.mime_type}\n"
+    schema_hint = (
         "Return JSON with keys: document_id (string UUID), spend_domain (string or null), "
         "spend_kind (string or null), issuer_name (string or null), currency (3-letter string), "
         "lines (array of objects with raw_label, amount, currency, quantity, quantity_unit, "
         "service_hint — all optional except raw_label when a line is present).\n"
         "document_id must equal the UUID above."
     )
+    user_parts = [
+        f"Document UUID: {document.id}",
+        f"MIME type: {document.mime_type}",
+        schema_hint,
+    ]
+    if document_text and document_text.strip():
+        bounded = truncate_text_for_llm(document_text.strip(), max_chars=settings.extraction_llm_max_document_chars)
+        user_parts.append("--- BEGIN BILL TEXT ---")
+        user_parts.append(bounded)
+        user_parts.append("--- END BILL TEXT ---")
+    else:
+        user_parts.append("(No bill text was extracted from the file.)")
+
+    user = "\n".join(user_parts)
 
     body = {
         "model": model,
@@ -106,15 +125,23 @@ def llm_generic_bill_dict(*, document: Document, settings: Settings) -> dict[str
     if not isinstance(data, dict):
         raise RuntimeError("LLM JSON root must be an object")
 
-    # Hard-bind tenant document to avoid cross-document writes if the model drifts.
     data["document_id"] = str(document.id)
     return data
 
 
-def safe_llm_generic_bill_dict(*, document: Document, settings: Settings) -> dict[str, Any] | None:
+def safe_llm_generic_bill_dict(
+    *,
+    document: Document,
+    settings: Settings,
+    document_text: str | None = None,
+) -> dict[str, Any] | None:
     """Return LLM dict or ``None`` on any failure (caller supplies fallback)."""
     try:
-        return llm_generic_bill_dict(document=document, settings=settings)
+        return llm_generic_bill_dict(
+            document=document,
+            settings=settings,
+            document_text=document_text,
+        )
     except Exception:
         logger.exception("extraction_llm: failed for document_id=%s", document.id)
         return None

@@ -1,12 +1,11 @@
 """Persist raw extraction JSON for a document (2a) then ``bill_sync`` consumes it (2d).
 
-New pipeline rows use ``generic-bill-v1`` (strict Pydantic in **2b**). When
-``Settings.extraction_llm_api_key`` is set, the worker first asks an OpenAI-compatible
-Chat Completions endpoint; on any failure it falls back to a **deterministic** payload
-so dev and CI stay green without network.
+Pipeline: load bytes from S3 → **embedded PDF text** (``pypdf``) → optional **LLM**
+structuring → strict Pydantic (**2b**) → JSONB insert. Scanned PDFs with no text
+layer set ``needs_ocr`` and fail until OCR is implemented.
 
-``stub-v1`` remains valid for **reading** older JSONB rows; new inserts use
-``generic-bill-v1`` only.
+When ``Settings.extraction_llm_api_key`` is empty, a **deterministic** sample payload
+is still used for dev/CI (see ``structured_via`` in returned provenance).
 """
 
 from __future__ import annotations
@@ -21,6 +20,11 @@ from app.config import get_settings
 from app.constants.extraction import GENERIC_BILL_EXTRACTION_VERSION
 from app.models.document import Document
 from app.models.document_raw_extraction import DocumentRawExtraction
+from app.services.document_text import (
+    DocumentTextExtractionError,
+    DocumentTextResult,
+    extract_text_for_document,
+)
 from app.services.extraction_llm import safe_llm_generic_bill_dict
 from app.services.extraction_validate import validate_raw_extraction_payload
 
@@ -28,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_deterministic_generic_bill_dict(document: Document) -> dict[str, Any]:
-    """Seed ``generic-bill-v1`` JSON without LLM (same shape as previous stub sample)."""
+    """Seed ``generic-bill-v1`` JSON without LLM (dev/CI when no API key or LLM failure)."""
     return {
         "document_id": str(document.id),
         "spend_domain": "utility",
@@ -48,24 +52,66 @@ def build_deterministic_generic_bill_dict(document: Document) -> dict[str, Any]:
     }
 
 
-def persist_raw_extraction_for_document(session: Session, *, document: Document) -> DocumentRawExtraction:
+def _provenance_base(text_result: DocumentTextResult | None) -> dict[str, Any]:
+    """Merge text-extraction stats for ``bills.summary`` (no full bill body)."""
+    if text_result is None:
+        return {"text_extraction_method": "skipped_unsupported_mime"}
+    return dict(text_result.to_summary_dict())
+
+
+def persist_raw_extraction_for_document(
+    session: Session,
+    *,
+    document: Document,
+) -> tuple[DocumentRawExtraction, dict[str, Any]]:
     """Validate extraction JSON (2b), insert ``document_raw_extractions``, set ``extracted``.
 
-    Returns the new row so the worker can set ``bills.raw_extraction_id``.
+    Returns the new row and a provenance dict for ``bill_sync`` summary merge.
     """
     settings = get_settings()
+    text_result: DocumentTextResult | None = None
+    try:
+        text_result = extract_text_for_document(document, settings=settings)
+    except DocumentTextExtractionError:
+        raise
+    except Exception as exc:
+        raise DocumentTextExtractionError(f"Could not read document bytes: {exc}") from exc
+
+    provenance = _provenance_base(text_result)
+
+    if text_result is not None and text_result.needs_ocr:
+        raise DocumentTextExtractionError(
+            "Document has little or no embedded text (likely a scan or image). "
+            "OCR is not enabled yet; upload a digital PDF with selectable text or wait for OCR support.",
+        )
+
+    bill_text = text_result.text if text_result and text_result.has_usable_text else None
     candidate: dict[str, Any]
     model_id: str
+    has_llm_key = bool((settings.extraction_llm_api_key or "").strip())
 
-    if (settings.extraction_llm_api_key or "").strip():
-        llm_out = safe_llm_generic_bill_dict(document=document, settings=settings)
+    if has_llm_key:
+        llm_out = safe_llm_generic_bill_dict(
+            document=document,
+            settings=settings,
+            document_text=bill_text,
+        )
         if llm_out is not None:
             candidate = llm_out
             model_id = settings.extraction_llm_model
+            provenance["structured_via"] = "llm"
         else:
             candidate = build_deterministic_generic_bill_dict(document)
             model_id = settings.raw_extraction_stub_model_id
+            provenance["structured_via"] = "deterministic_fallback"
     else:
+        if bill_text:
+            provenance["structured_via"] = "deterministic_stub"
+            provenance["structured_note"] = (
+                "Set EXTRACTION_LLM_API_KEY to structure line items from extracted PDF text."
+            )
+        else:
+            provenance["structured_via"] = "deterministic_stub"
         candidate = build_deterministic_generic_bill_dict(document)
         model_id = settings.raw_extraction_stub_model_id
 
@@ -85,15 +131,18 @@ def persist_raw_extraction_for_document(session: Session, *, document: Document)
     document.processing_status = "extracted"
     session.flush()
     logger.info(
-        "raw_extraction: stored id=%s document=%s version=%s model_id=%s",
+        "raw_extraction: stored id=%s document=%s version=%s model_id=%s chars=%s via=%s",
         row.id,
         document.id,
         GENERIC_BILL_EXTRACTION_VERSION,
         model_id,
+        text_result.char_count if text_result else 0,
+        provenance.get("structured_via"),
     )
-    return row
+    return row, provenance
 
 
 def persist_stub_raw_extraction(session: Session, *, document: Document) -> DocumentRawExtraction:
     """Backward-compatible name for tests / imports; delegates to ``generic-bill-v1``."""
-    return persist_raw_extraction_for_document(session, document=document)
+    row, _ = persist_raw_extraction_for_document(session, document=document)
+    return row
