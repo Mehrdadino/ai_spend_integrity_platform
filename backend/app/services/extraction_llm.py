@@ -81,8 +81,10 @@ def llm_generic_bill_dict(
     schema_hint = (
         "Return JSON with keys: document_id (string UUID), spend_domain (string or null), "
         "spend_kind (string or null), issuer_name (string or null), currency (3-letter string), "
+        "period_start (ISO date YYYY-MM-DD or null), period_end (ISO date YYYY-MM-DD or null), "
         "lines (array of objects with raw_label, amount, currency, quantity, quantity_unit, "
         "service_hint — all optional except raw_label when a line is present).\n"
+        "Extract period_start and period_end from the bill's service period / statement dates when visible.\n"
         "document_id must equal the UUID above."
     )
     user_parts = [

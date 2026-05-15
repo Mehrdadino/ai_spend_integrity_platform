@@ -3,7 +3,7 @@
 All routes require ``X-Organization-Id`` matching an organization UUID.
 
 Static paths (``presigned-upload``) and sub-resources (``read-url``, ``viewer``, ``bill``,
-``reprocess``) are registered before bare ``GET /{document_id}`` so path segments are not
+``bill/prior-bills``, ``reprocess``) are registered before bare ``GET /{document_id}`` so path segments are not
 parsed as UUIDs where inappropriate. The collection route ``GET ""`` must stay
 before ``GET /{document_id}``.
 """
@@ -20,21 +20,27 @@ from app.config import get_settings
 from app.db.session import get_db
 from app.models.document import Document
 from app.models.organization import Organization
-from app.repositories.bills import get_bill_for_org_document
+from app.repositories.bills import get_bill_for_org_document, get_prior_bills_for_org_document
 from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
 from app.repositories.documents import get_document_for_organization, list_documents_for_organization
-from app.schemas.bills import BillResponse, DocumentBillResponse
+from app.schemas.bills import BillResponse, DocumentBillResponse, DocumentPriorBillsResponse
+from app.services.comparison.period import BILL_ORDERING_NOTE
+from app.services.document_site import DocumentSiteAssignmentError, assign_site_to_document
 from app.schemas.documents import (
     CompleteUploadResponse,
     DocumentDetailResponse,
     DocumentListItemResponse,
     DocumentReadUrlResponse,
     DocumentViewerResponse,
+    PatchDocumentSiteRequest,
+    PatchDocumentSiteResponse,
     PresignedUploadRequest,
     PresignedUploadResponse,
     RawExtractionSnapshotResponse,
+    DeleteDocumentResponse,
     ReprocessDocumentResponse,
 )
+from app.services.document_soft_delete import soft_delete_document
 from app.services.document_pipeline_queue import enqueue_document_pipeline_safe
 from app.services.document_read_urls import presigned_get_url_for_document
 from app.services.document_reprocess import (
@@ -225,6 +231,70 @@ def get_document_bill(
         document_id=document_id,
         bill=BillResponse.model_validate(bill),
     )
+
+
+@router.get("/{document_id}/bill/prior-bills", response_model=DocumentPriorBillsResponse)
+def get_document_prior_bills(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+    limit: int = Query(10, ge=1, le=50, description="Max prior bills to return (same site)."),
+) -> DocumentPriorBillsResponse:
+    """Return older normalized bills for the same ``site_id`` (§3a); empty when no site or no history."""
+    doc = get_document_for_organization(
+        db, document_id=document_id, organization_id=org.id
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    current, priors = get_prior_bills_for_org_document(
+        db,
+        organization_id=org.id,
+        document_id=document_id,
+        limit=limit,
+    )
+    return DocumentPriorBillsResponse(
+        document_id=document_id,
+        site_id=current.site_id if current else doc.site_id,
+        current_bill_id=current.id if current else None,
+        ordering_note=BILL_ORDERING_NOTE,
+        prior_bills=[BillResponse.model_validate(b) for b in priors],
+    )
+
+
+@router.patch("/{document_id}/site", response_model=PatchDocumentSiteResponse)
+def patch_document_site(
+    document_id: UUID,
+    body: PatchDocumentSiteRequest,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> PatchDocumentSiteResponse:
+    """Assign a site to this document (and bill) for §3 historical comparison."""
+    try:
+        doc = assign_site_to_document(
+            db,
+            organization_id=org.id,
+            document_id=document_id,
+            site_id=body.site_id,
+        )
+    except DocumentSiteAssignmentError as exc:
+        status = 404 if "not found" in exc.detail.lower() else 400
+        raise HTTPException(status_code=status, detail=exc.detail) from exc
+    return PatchDocumentSiteResponse(document_id=doc.id, site_id=doc.site_id)
+
+
+@router.delete("/{document_id}", response_model=DeleteDocumentResponse)
+def delete_document(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> DeleteDocumentResponse:
+    """Soft-delete: set ``deleted_at``; row and S3 object remain until hard delete is implemented."""
+    doc = soft_delete_document(
+        db, organization_id=org.id, document_id=document_id
+    )
+    if doc is None or doc.deleted_at is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return DeleteDocumentResponse(document_id=doc.id, deleted_at=doc.deleted_at)
 
 
 @router.post("/{document_id}/reprocess", response_model=ReprocessDocumentResponse)

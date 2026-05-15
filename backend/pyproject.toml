@@ -24,6 +24,7 @@ dependencies = [
 register-document = "app.scripts.register_document:main"
 document-worker = "app.scripts.run_rq_worker:main"
 seed-dev-org = "app.scripts.seed_dev_org:main"
+assign-seattle-site = "app.scripts.assign_seattle_site:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

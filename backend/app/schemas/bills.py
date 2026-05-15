@@ -57,3 +57,13 @@ class DocumentBillResponse(BaseModel):
 
     document_id: UUID
     bill: Optional[BillResponse] = None
+
+
+class DocumentPriorBillsResponse(BaseModel):
+    """Prior normalized bills for the same site (§3a), newest-first among priors."""
+
+    document_id: UUID
+    site_id: Optional[UUID] = None
+    current_bill_id: Optional[UUID] = None
+    ordering_note: str
+    prior_bills: list[BillResponse] = Field(default_factory=list)

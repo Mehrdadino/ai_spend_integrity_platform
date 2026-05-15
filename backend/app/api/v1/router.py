@@ -6,8 +6,9 @@ paths do not overlap (``/organizations`` vs ``/documents``).
 
 from fastapi import APIRouter
 
-from app.api.v1 import documents, organizations
+from app.api.v1 import documents, organizations, sites
 
 api_router = APIRouter()
 api_router.include_router(organizations.router)
 api_router.include_router(documents.router)
+api_router.include_router(sites.router)

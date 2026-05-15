@@ -117,6 +117,20 @@ export interface DocumentBillResponse {
   bill: BillResponse | null;
 }
 
+/** Prior bills for the same site (§3a). */
+export interface DocumentPriorBillsResponse {
+  document_id: string;
+  site_id: string | null;
+  current_bill_id: string | null;
+  ordering_note: string;
+  prior_bills: BillResponse[];
+}
+
+export interface PatchDocumentSiteResponse {
+  document_id: string;
+  site_id: string | null;
+}
+
 function orgHeaders(orgId: string): HeadersInit {
   return {
     "Content-Type": "application/json",
@@ -129,15 +143,20 @@ export async function presignUpload(
   apiBase: string,
   orgId: string,
   file: File,
+  siteId?: string | null,
 ): Promise<PresignedUploadResponse> {
   const mime = file.type || "application/octet-stream";
+  const body: Record<string, unknown> = {
+    mime_type: mime,
+    expected_byte_size: file.size,
+  };
+  if (siteId && siteId.trim()) {
+    body.site_id = siteId.trim();
+  }
   const res = await fetch(`${apiBase}/api/v1/documents/presigned-upload`, {
     method: "POST",
     headers: orgHeaders(orgId),
-    body: JSON.stringify({
-      mime_type: mime,
-      expected_byte_size: file.size,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -259,6 +278,60 @@ export async function fetchDocumentBill(
     throw new Error(`Document bill failed (${res.status}): ${body}`);
   }
   return res.json() as Promise<DocumentBillResponse>;
+}
+
+/** Older bills for the same site (§3a). */
+export async function fetchDocumentPriorBills(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+  limit = 10,
+): Promise<DocumentPriorBillsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill/prior-bills?${params}`, {
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Prior bills failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<DocumentPriorBillsResponse>;
+}
+
+/** Set or clear ``site_id`` on a document (and its bill). */
+export async function patchDocumentSite(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+  siteId: string | null,
+): Promise<PatchDocumentSiteResponse> {
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/site`, {
+    method: "PATCH",
+    headers: orgHeaders(orgId),
+    body: JSON.stringify({ site_id: siteId }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Assign site failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<PatchDocumentSiteResponse>;
+}
+
+/** Soft-delete document (sets ``deleted_at``; hidden from list/viewer). */
+export async function deleteDocument(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+): Promise<{ document_id: string; deleted_at: string }> {
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}`, {
+    method: "DELETE",
+    headers: orgHeaders(orgId),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Delete document failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<{ document_id: string; deleted_at: string }>;
 }
 
 /** Re-queue extraction + bill sync for a finalized document (``extracted`` / ``failed`` / ``received``). */

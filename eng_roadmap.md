@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-14  
+**Last updated:** 2026-05-14 (document soft delete + §3a prior bills)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -27,18 +27,35 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional **Tesseract OCR** for scan-only PDFs / images → optional LLM → **`generic-bill-v1`** JSONB. |
 | **2b** | Strict Pydantic for **`stub-v1`** and **`generic-bill-v1`** (**``extra=forbid``**). |
 | **2c–2d** | Normalization + transactional **`bills` / `bill_line_items`** upsert; **`GET …/bill`**. |
+| **3a** | Prior-bill queries: `app/services/comparison/period.py`, `app/repositories/bills.py` (`list_bills_for_site`, `get_prior_bills_for_bill`), **`GET …/bill/prior-bills`**. |
+| **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete** button (hidden from list). |
 | **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
 
 ### Not started (still Phase 1 product scope)
 
-- **OCR quality hardening** — tune OCR thresholds/rendering and increase scan coverage tests.
-- **§3–5:** comparison, explainability, review.
+- **§3b–3e:** rule pack, site-to-site, anomaly persistence, comparison backfill.
+- **§4–5:** explainability, review workflow.
 - **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
+
+### Deferred / optional (see also `product_roadmap.md`)
+
+| ID | Item |
+|----|------|
+| **2-OPT** | Optional `total_amount` on `generic-bill-v1` `raw_payload` (amount due vs sum-of-lines). |
+| **1-OPT** | `site_id` on upload UI (API already accepts it). |
+| **2-OPT** | OCR quality hardening (DPI/thresholds, coverage tests). |
+| **2e** | Internal raw vs normalized viewer (admin). |
+| **3c** | Site-to-site comparables. |
+| **3e** | Comparison backfill / optimized prior-bill SQL at scale. |
+| **4b-OPT** | LLM polish on explanation templates. |
+| **1e–1g** | Inbound email ingestion (removed from repo; revisit if product wants it). |
+| **P1–P3** | Auth, idempotency hardening, RBAC (track parallel to §5). |
 
 ### Suggested “resume here” order
 
-1. **§3** — comparison rules once two+ structured bills exist per site (enable **`EXTRACTION_LLM_API_KEY`** for real line items).  
-2. **OCR quality hardening** — tune thresholds / OCR rendering & add OCR coverage tests when needed.
+1. **§3b** — rule pack v1 (code-first) using **3a** prior bills.  
+2. **§3d** — `anomalies` table + API + UI list.  
+3. **§4** — template explainability from stored metrics.
 
 ---
 

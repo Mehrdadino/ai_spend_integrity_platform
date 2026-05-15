@@ -39,6 +39,13 @@ class CompleteUploadResponse(BaseModel):
     processing_error: Optional[str] = None
 
 
+class DeleteDocumentResponse(BaseModel):
+    """Acknowledgement after soft delete (row kept for future hard delete / audit)."""
+
+    document_id: UUID
+    deleted_at: datetime
+
+
 class ReprocessDocumentResponse(BaseModel):
     """Same status fields as list/detail after requeue: ``queued`` until the worker runs."""
 
@@ -88,6 +95,22 @@ class DocumentViewerResponse(DocumentDetailResponse):
 
     read_url: str
     read_url_expires_in_seconds: int
+
+
+class PatchDocumentSiteRequest(BaseModel):
+    """Assign or clear the facility/site for a document (and its bill, if present)."""
+
+    site_id: Optional[UUID] = Field(
+        None,
+        description="Site UUID under this org, or null to clear.",
+    )
+
+
+class PatchDocumentSiteResponse(BaseModel):
+    """Echo document id and effective site after assignment."""
+
+    document_id: UUID
+    site_id: Optional[UUID] = None
 
 
 class DocumentListItemResponse(BaseModel):

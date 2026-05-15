@@ -1,110 +1,95 @@
-# Bill extraction: OCR vs LLM vs “structured bill”
+# Bill extraction & comparison — UI guide
 
-This doc explains what runs without an API key, what needs **`EXTRACTION_LLM_API_KEY`**, and how to configure **Google Gemini** (AI Studio dev key).
-
----
-
-## Two meanings of “structured bill”
-
-| Meaning | What it is | LLM required? |
-|--------|------------|----------------|
-| **A. Structured in the database** | Rows in `bills` / `bill_line_items`, typed fields, `GET /api/v1/documents/{id}/bill` | **No** — you always get this after a successful pipeline run |
-| **B. Structured from *your* PDF** | Line items that match *your* bill (amounts, labels, kWh, etc.) | **Yes today** (or a future rules/template parser we have not built yet) |
-
-### When we said you don’t need an LLM, we meant:
-
-- The **pipeline and UI** work without a key (upload → worker → **normalized bill shape**).
-- **OCR** turns scans into **plain text** without an LLM.
-
-### When we said you need a key, we meant:
-
-- Turning messy bill **text** into **your** line items is a separate, harder step. Right now that step is the **LLM**. Without it, we still fill the tables with a **fixed sample** (“Electricity delivery (sample)”, 142.5 USD, …).
-
-So the wording “structured bill” was easy to misread. More precise:
-
-- You **always** get a normalized bill **(A)**.
-- You only get **your bill’s content (B)** with **OCR + LLM** (or later a rules/template parser).
+Everything below is done in the **web app** (`./scripts/dev.sh` → open http://127.0.0.1:5173). No `curl` or CLI required.
 
 ---
 
-## Pipeline (what each step does)
+## Concepts (30 seconds)
 
-```text
-PDF/image  →  [pypdf / Tesseract]  →  long string of text     (no LLM)
-long text  →  [LLM or stub]        →  JSON line items       (LLM for real data today)
-JSON       →  [normalization]      →  bills + bill_line_items (no LLM)
-```
-
-**OCR does not produce line items.** It produces something like:
-
-```text
-ACME ELECTRIC  Account 12345  ...  Delivery charge  $142.50  ...
-```
-
-Something still has to decide which bits are lines, amounts, and units. That is **structuring/parsing** — Phase 1 uses an LLM for that.
+| Term | Meaning |
+|------|---------|
+| **Organization** | Your tenant (who owns data). Set once under **Connection**. |
+| **Site** | A **location** under that org (e.g. “Seattle store”). **Not** the org UUID and **not** parsed from the PDF. |
+| **Bill** | Normalized line items after the worker runs. |
+| **Prior bills** | Older bills for the **same site** — used for month-over-month comparison (§3a). |
 
 ---
 
-## Configure extraction (backend `.env`)
+## One-time setup
 
-Settings are read from **`backend/.env`** (see `backend/app/config.py`). After editing, **restart** `./scripts/dev.sh` and **reprocess** the document.
+1. Start the stack: `./scripts/dev.sh` (from repo root).
+2. Open **http://127.0.0.1:5173**.
+3. **Organizations** tab → create or pick your org → click **Use in Connection** (fills Organization ID).
+4. **Connection** (on any tab, top card):
+   - Confirm **API base URL** is `http://127.0.0.1:8000`.
+   - Under **Site (location)**:
+     - Enter a name (e.g. `Seattle`) → **Create site**.
+     - In **Site for uploads**, select **Seattle**.
+5. Leave this org and site selected while you upload all Seattle months.
 
-### OpenAI (defaults)
+---
+
+## Upload each month’s bill
+
+1. **Upload** tab.
+2. Confirm **Connection** still has your org + **Seattle** (or your site) selected.
+3. Choose the PDF → **Upload**.
+4. Wait until status is **extracted** (use **Documents** tab; the viewer auto-refreshes).
+
+Repeat for every month. **Use the same organization and the same site** every time.
+
+---
+
+## Fix bills you uploaded *before* sites existed
+
+1. **Documents** tab → click a Seattle bill row.
+2. In the viewer, find **Site**:
+   - Choose **Seattle** in the dropdown.
+   - Click **Save site**.
+3. Repeat for each old Seattle document that shows **Site** as “—”.
+
+After two or more Seattle bills share the site and are **extracted**, scroll down in the viewer to **Prior bills (same site)**.
+
+---
+
+## OCR vs LLM (why line items look “sample” or real)
+
+| Step | Needs API key? |
+|------|----------------|
+| PDF / scan → text (pypdf / Tesseract) | **No** |
+| Text → your line items (LLM) | **Yes** — `EXTRACTION_LLM_*` in `backend/.env`, restart `dev.sh` |
+| Normalized bill in the UI | Always (may be sample lines without LLM) |
+
+**Gemini (in `backend/.env`, then restart `dev.sh`):**
 
 ```bash
-EXTRACTION_LLM_API_KEY=sk-...
-# optional overrides:
-# EXTRACTION_LLM_BASE_URL=https://api.openai.com/v1
-# EXTRACTION_LLM_MODEL=gpt-4o-mini
-```
-
-### Google Gemini (AI Studio free dev key)
-
-Use Google’s **OpenAI-compatible** endpoint ([docs](https://ai.google.dev/gemini-api/docs/openai)):
-
-```bash
-EXTRACTION_LLM_API_KEY=your-gemini-api-key-here
+EXTRACTION_LLM_API_KEY=your-key
 EXTRACTION_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 EXTRACTION_LLM_MODEL=gemini-2.5-flash
 ```
 
-Notes:
-
-- **`EXTRACTION_LLM_API_KEY`** — the key from [Google AI Studio](https://aistudio.google.com/apikey) (not your Cursor subscription).
-- **`EXTRACTION_LLM_BASE_URL`** — required for Gemini; do not use the OpenAI default.
-- **`EXTRACTION_LLM_MODEL`** — use a **current** model id (e.g. `gemini-2.5-flash`). **`gemini-2.0-flash` returns HTTP 404 for new API keys** — update `.env` and restart `dev.sh`. See the [models list](https://ai.google.dev/gemini-api/docs/models) if a name 404s.
-
-### Local Ollama (optional, free)
-
-```bash
-EXTRACTION_LLM_API_KEY=ollama
-EXTRACTION_LLM_BASE_URL=http://127.0.0.1:11434/v1
-EXTRACTION_LLM_MODEL=llama3.2
-```
-
-Run `ollama serve` and pull the model first. JSON mode support varies by model.
+Then **Reprocess** the document in the viewer.
 
 ---
 
-## What to check in the UI
+## Pipeline diagram
 
-After **reprocess**:
-
-| Field | Meaning |
-|-------|---------|
-| **Structured via** `deterministic_stub` | No API key (or no bill text); sample line items |
-| **Structured via** `llm` | LLM produced line items from extracted/OCR text |
-| **Structured via** `deterministic_fallback` | Key was set but the LLM call failed; sample lines + **LLM structuring error** message |
-| **PDF text … N chars · method** | Text extraction/OCR ran (independent of LLM) |
-
-**Cursor** does not provide an API key for this worker — use OpenAI, Gemini, Groq, Ollama, etc.
+```text
+PDF/image  →  [pypdf / Tesseract]  →  plain text        (no LLM)
+plain text →  [LLM or stub]        →  JSON line items   (LLM for real data)
+JSON       →  [normalization]      →  bills in UI       (no LLM)
+same site  →  [prior bills]       →  history table     (§3a, in viewer)
+```
 
 ---
 
-## System dependencies (OCR, one-time on macOS)
+## Troubleshooting in the UI
 
-```bash
-brew install tesseract poppler
-```
+| Symptom | What to do |
+|---------|------------|
+| **Prior bills** empty | Need **2+** extracted bills on the **same site**; assign site on old uploads. |
+| **Site** dropdown empty | **Create site** under Connection → **Refresh sites**. |
+| Sample line items (“Electricity delivery (sample)”) | Set LLM env vars, restart dev stack, **Reprocess**. |
+| Red **LLM structuring error** | Fix model name / key in `.env` (use `gemini-2.5-flash`, not deprecated `2.0-flash`). |
 
-Python deps are installed by `./scripts/dev.sh` (`uv sync` in `backend/`).
+**Cursor** does not replace `EXTRACTION_LLM_API_KEY` — use Google AI Studio or another provider.

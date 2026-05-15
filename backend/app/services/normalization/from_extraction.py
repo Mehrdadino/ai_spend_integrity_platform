@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -58,6 +59,8 @@ class NormalizedBillDraft:
     lines: list[NormalizedLineDraft]
     summary: dict[str, Any] = field(default_factory=dict)
     issuer_name: str | None = None
+    period_start: date | None = None
+    period_end: date | None = None
 
 
 def _to_decimal(value: float | int | None) -> Decimal | None:
@@ -196,6 +199,10 @@ def build_bundle_from_generic(document: Document, model: GenericBillExtractionPa
     )
     if issuer:
         summary["issuer_name"] = issuer
+    if model.period_start is not None:
+        summary["period_start"] = model.period_start.isoformat()
+    if model.period_end is not None:
+        summary["period_end"] = model.period_end.isoformat()
     return NormalizedBillDraft(
         spend_domain=spend_domain,
         spend_kind=spend_kind,
@@ -204,6 +211,8 @@ def build_bundle_from_generic(document: Document, model: GenericBillExtractionPa
         lines=lines,
         summary=summary,
         issuer_name=issuer,
+        period_start=model.period_start,
+        period_end=model.period_end,
     )
 
 

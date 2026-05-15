@@ -79,6 +79,12 @@ class Document(Base):
     processing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     # Worker/API failure summary for ingestion list UI (cleared on successful retry).
     processing_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Soft delete: set by DELETE API; excluded from list/viewer queries until hard delete exists.
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

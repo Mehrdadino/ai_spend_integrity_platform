@@ -16,17 +16,22 @@ import {
   fetchOrganizationsList,
   type OrganizationResponse,
 } from "./lib/organizations";
+import { createSite, fetchSitesList, type SiteResponse } from "./lib/sites";
 import {
   completeUpload,
+  deleteDocument,
   fetchDocumentBill,
+  fetchDocumentPriorBills,
   fetchDocumentViewer,
   fetchDocumentsList,
+  patchDocumentSite,
   presignUpload,
   putFileToPresignedUrl,
   reprocessDocument,
   type BillResponse,
   type CompleteUploadResponse,
   type DocumentListItemResponse,
+  type DocumentPriorBillsResponse,
   type DocumentViewerResponse,
 } from "./lib/upload";
 
@@ -37,6 +42,67 @@ const defaultApiBase = "http://127.0.0.1:8000";
 
 /** Interval (ms) for refetching viewer + bill while ``queued`` / ``pending`` / ``received``. */
 const PIPELINE_POLL_MS = 2500;
+const SITE_BY_ORG_STORAGE_KEY = "spend_site_by_org";
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
+}
+
+function loadStoredSiteId(orgId: string): string {
+  try {
+    const raw = localStorage.getItem(SITE_BY_ORG_STORAGE_KEY);
+    if (!raw) {
+      return "";
+    }
+    const map = JSON.parse(raw) as Record<string, string>;
+    return map[orgId] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Billing period label + sort key (matches backend §3a ``effective_period_end``). */
+function billPeriodSortKey(bill: BillResponse): string {
+  if (bill.period_end) {
+    return bill.period_end;
+  }
+  if (bill.period_start) {
+    return bill.period_start;
+  }
+  return bill.created_at.slice(0, 10);
+}
+
+function formatBillPeriod(bill: BillResponse): string {
+  if (bill.period_start && bill.period_end) {
+    return `${bill.period_start} – ${bill.period_end}`;
+  }
+  if (bill.period_end) {
+    return bill.period_end;
+  }
+  if (bill.period_start) {
+    return bill.period_start;
+  }
+  return `— (uploaded ${new Date(bill.created_at).toLocaleDateString()})`;
+}
+
+function priorBillsSortedByPeriod(bills: BillResponse[]): BillResponse[] {
+  return [...bills].sort((a, b) => billPeriodSortKey(b).localeCompare(billPeriodSortKey(a)));
+}
+
+function storeSiteIdForOrg(orgId: string, siteId: string): void {
+  try {
+    const raw = localStorage.getItem(SITE_BY_ORG_STORAGE_KEY);
+    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    if (siteId) {
+      map[orgId] = siteId;
+    } else {
+      delete map[orgId];
+    }
+    localStorage.setItem(SITE_BY_ORG_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
 
 /** Worker statuses where the viewer should show the pipeline overlay and poll. */
 const PIPELINE_BUSY_STATUSES = new Set(["queued", "pending", "received"]);
@@ -129,10 +195,22 @@ function DocumentViewerPanel({
   billError,
   onClose,
   onReprocess,
+  onDelete,
   reprocessBusy,
   reprocessError,
+  deleteBusy,
+  deleteError,
   pipelineBusy,
   pipelineBusyLabel,
+  sites,
+  assignSiteValue,
+  onAssignSiteValueChange,
+  onApplySite,
+  assignSiteBusy,
+  assignSiteError,
+  priorBills,
+  priorBillsLoading,
+  priorBillsError,
 }: {
   headerDocumentId: string | null;
   viewer: DocumentViewerResponse | null;
@@ -144,11 +222,23 @@ function DocumentViewerPanel({
   onClose: () => void;
   /** When set, show **Reprocess** to re-enqueue the worker (stuck ``queued``, ``extracted`` without bill, etc.). */
   onReprocess?: () => void;
+  onDelete?: () => void;
   reprocessBusy?: boolean;
   reprocessError?: string | null;
+  deleteBusy?: boolean;
+  deleteError?: string | null;
   /** Show spinner overlay (reprocess / worker / background refresh) without clearing prior content. */
   pipelineBusy?: boolean;
   pipelineBusyLabel?: string;
+  sites?: SiteResponse[];
+  assignSiteValue?: string;
+  onAssignSiteValueChange?: (siteId: string) => void;
+  onApplySite?: () => void;
+  assignSiteBusy?: boolean;
+  assignSiteError?: string | null;
+  priorBills?: BillResponse[] | null;
+  priorBillsLoading?: boolean;
+  priorBillsError?: string | null;
 }) {
   const showPanel =
     loading ||
@@ -158,7 +248,9 @@ function DocumentViewerPanel({
     billError ||
     bill !== null ||
     reprocessBusy ||
-    !!reprocessError;
+    deleteBusy ||
+    !!reprocessError ||
+    !!deleteError;
   const reprocessBlocked = !viewer || viewer.processing_status === "awaiting_object";
   const reprocessTitle = reprocessBlocked
     ? !viewer
@@ -189,11 +281,22 @@ function DocumentViewerPanel({
             <button
               type="button"
               className="secondary"
-              disabled={reprocessBusy || reprocessBlocked}
+              disabled={reprocessBusy || deleteBusy || reprocessBlocked}
               title={reprocessTitle}
               onClick={() => onReprocess()}
             >
               {reprocessBusy ? "Reprocessing…" : "Reprocess"}
+            </button>
+          ) : null}
+          {onDelete ? (
+            <button
+              type="button"
+              className="btn-danger"
+              disabled={deleteBusy || reprocessBusy || !viewer}
+              title="Remove this document from your list (soft delete; file kept in storage for now)"
+              onClick={() => onDelete()}
+            >
+              {deleteBusy ? "Deleting…" : "Delete"}
             </button>
           ) : null}
           <button type="button" className="secondary" onClick={onClose}>
@@ -202,6 +305,7 @@ function DocumentViewerPanel({
         </div>
       </div>
       {reprocessError ? <p className="error">{reprocessError}</p> : null}
+      {deleteError ? <p className="error">{deleteError}</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {loading && !viewer ? (
         <div className="doc-preview-shell doc-preview-shell--loading">
@@ -223,8 +327,43 @@ function DocumentViewerPanel({
             <dd>
               <code>{viewer.organization_id}</code>
             </dd>
-            <dt>Site ID</dt>
-            <dd>{viewer.site_id ? <code>{viewer.site_id}</code> : "—"}</dd>
+            <dt>Site</dt>
+            <dd>
+              {onApplySite && sites && sites.length > 0 ? (
+                <div className="site-assign-inline">
+                  <select
+                    className="site-select"
+                    value={assignSiteValue ?? ""}
+                    disabled={assignSiteBusy}
+                    onChange={(e) => onAssignSiteValueChange?.(e.target.value)}
+                    aria-label="Site for this document"
+                  >
+                    <option value="">— No site —</option>
+                    {sites.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="secondary site-assign-btn"
+                    disabled={assignSiteBusy}
+                    onClick={() => onApplySite()}
+                  >
+                    {assignSiteBusy ? "Saving…" : "Save site"}
+                  </button>
+                </div>
+              ) : viewer.site_id ? (
+                <code>{viewer.site_id}</code>
+              ) : (
+                "—"
+              )}
+              {assignSiteError ? <p className="error site-assign-error">{assignSiteError}</p> : null}
+              {!viewer.site_id && sites && sites.length === 0 ? (
+                <p className="hint">Create a site under Connection, then assign it here for bill history.</p>
+              ) : null}
+            </dd>
             <dt>Source</dt>
             <dd>{viewer.source}</dd>
             <dt>Status</dt>
@@ -287,6 +426,8 @@ function DocumentViewerPanel({
                 <dd>{bill.spend_kind ?? "—"}</dd>
                 <dt>Issuer</dt>
                 <dd>{bill.issuer_name ?? "—"}</dd>
+                <dt>Period</dt>
+                <dd className="cell-mono">{formatBillPeriod(bill)}</dd>
                 <dt>Total</dt>
                 <dd>
                   {bill.total_amount != null && bill.total_amount !== undefined
@@ -365,6 +506,43 @@ function DocumentViewerPanel({
               )}
             </>
           ) : null}
+          {priorBillsLoading || priorBillsError || priorBills !== undefined ? (
+            <div className="prior-bills-section">
+              <h4 className="prior-bills-title">Prior bills (same site)</h4>
+              {priorBillsError ? <p className="error">{priorBillsError}</p> : null}
+              {priorBillsLoading ? <p className="hint">Loading prior bills…</p> : null}
+              {!priorBillsLoading && priorBills && priorBills.length === 0 ? (
+                <p className="hint">
+                  No older bills for this site yet. Upload another month with the same site selected under Connection.
+                </p>
+              ) : null}
+              <p className="hint prior-bills-note">Sorted by billing period (newest first).</p>
+              {priorBills && priorBills.length > 0 ? (
+                <div className="table-wrap bill-table-wrap">
+                  <table className="bill-table">
+                    <thead>
+                      <tr>
+                        <th>Period</th>
+                        <th>Issuer</th>
+                        <th>Total</th>
+                        <th title="When this file was processed in the platform">Uploaded</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {priorBillsSortedByPeriod(priorBills).map((pb) => (
+                        <tr key={pb.id}>
+                          <td className="cell-mono">{formatBillPeriod(pb)}</td>
+                          <td>{pb.issuer_name ?? "—"}</td>
+                          <td>{pb.total_amount != null ? `${pb.total_amount} ${pb.currency}` : "—"}</td>
+                          <td>{new Date(pb.created_at).toLocaleDateString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
       </div>
@@ -379,6 +557,14 @@ export function App() {
   const [view, setView] = useState<AppView>("upload");
   const [apiBase, setApiBase] = useState(() => (envApi && envApi.length > 0 ? envApi : defaultApiBase));
   const [orgId, setOrgId] = useState(() => envOrg ?? "");
+  /** Default site for new uploads (per org, stored in localStorage). */
+  const [selectedSiteId, setSelectedSiteId] = useState("");
+  const [siteRows, setSiteRows] = useState<SiteResponse[]>([]);
+  const [siteListLoading, setSiteListLoading] = useState(false);
+  const [siteListError, setSiteListError] = useState<string | null>(null);
+  const [newSiteName, setNewSiteName] = useState("Seattle");
+  const [siteCreateBusy, setSiteCreateBusy] = useState(false);
+  const [siteCreateMessage, setSiteCreateMessage] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState("");
@@ -401,6 +587,14 @@ export function App() {
   const [viewerReloadNonce, setViewerReloadNonce] = useState(0);
   const [reprocessBusy, setReprocessBusy] = useState(false);
   const [reprocessError, setReprocessError] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [assignSiteDraft, setAssignSiteDraft] = useState("");
+  const [assignSiteBusy, setAssignSiteBusy] = useState(false);
+  const [assignSiteError, setAssignSiteError] = useState<string | null>(null);
+  const [priorBills, setPriorBills] = useState<BillResponse[] | undefined>(undefined);
+  const [priorBillsLoading, setPriorBillsLoading] = useState(false);
+  const [priorBillsError, setPriorBillsError] = useState<string | null>(null);
   /** Keep spinner visible from reprocess click until worker finishes and bill refetch settles. */
   const [pipelineHold, setPipelineHold] = useState(false);
   const loadedViewerDocIdRef = useRef<string | null>(null);
@@ -443,10 +637,70 @@ export function App() {
     setBillError(null);
     setBillLoading(false);
     setReprocessError(null);
+    setAssignSiteError(null);
+    setPriorBills(undefined);
+    setPriorBillsError(null);
     setPipelineHold(false);
     loadedViewerDocIdRef.current = null;
     loadedBillDocIdRef.current = null;
   }, []);
+
+  const loadSitesList = useCallback(async () => {
+    if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+      setSiteRows([]);
+      setSiteListError(null);
+      return;
+    }
+    setSiteListError(null);
+    setSiteListLoading(true);
+    try {
+      const rows = await fetchSitesList(apiBase.trim(), orgId.trim());
+      setSiteRows(rows);
+      const stored = loadStoredSiteId(orgId.trim());
+      if (stored && rows.some((s) => s.id === stored)) {
+        setSelectedSiteId(stored);
+      } else if (selectedSiteId && rows.some((s) => s.id === selectedSiteId)) {
+        /* keep current selection */
+      } else if (rows.length === 1) {
+        setSelectedSiteId(rows[0].id);
+        storeSiteIdForOrg(orgId.trim(), rows[0].id);
+      }
+    } catch (e) {
+      setSiteListError(e instanceof Error ? e.message : String(e));
+      setSiteRows([]);
+    } finally {
+      setSiteListLoading(false);
+    }
+  }, [apiBase, orgId]);
+
+  useEffect(() => {
+    void loadSitesList();
+  }, [loadSitesList]);
+
+  const handleCreateSite = useCallback(async () => {
+    if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+      setSiteCreateMessage("Set a valid Organization ID first.");
+      return;
+    }
+    const name = newSiteName.trim();
+    if (!name) {
+      setSiteCreateMessage("Enter a site name (e.g. Seattle).");
+      return;
+    }
+    setSiteCreateBusy(true);
+    setSiteCreateMessage(null);
+    try {
+      const created = await createSite(apiBase.trim(), orgId.trim(), name);
+      setSiteCreateMessage(`Site ready: ${created.name}`);
+      setSelectedSiteId(created.id);
+      storeSiteIdForOrg(orgId.trim(), created.id);
+      await loadSitesList();
+    } catch (e) {
+      setSiteCreateMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSiteCreateBusy(false);
+    }
+  }, [apiBase, orgId, newSiteName, loadSitesList]);
 
   /** Deep link: open Documents tab and select ``?doc=`` once on first mount. */
   useEffect(() => {
@@ -533,6 +787,77 @@ export function App() {
     };
   }, [selectedDocId, orgId, apiBase, viewerReloadNonce]);
 
+  useEffect(() => {
+    setAssignSiteDraft(documentViewer?.site_id ?? "");
+    setAssignSiteError(null);
+  }, [documentViewer?.document_id, documentViewer?.site_id]);
+
+  /** Load prior bills when current bill has a site (§3a). */
+  useEffect(() => {
+    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+      setPriorBills(undefined);
+      return;
+    }
+    const siteId = documentViewer?.site_id ?? documentBill?.site_id;
+    if (!siteId || documentViewer?.processing_status !== "extracted") {
+      setPriorBills(undefined);
+      setPriorBillsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPriorBillsLoading(true);
+    setPriorBillsError(null);
+    void fetchDocumentPriorBills(apiBase.trim(), orgId.trim(), selectedDocId)
+      .then((res: DocumentPriorBillsResponse) => {
+        if (!cancelled) {
+          setPriorBills(res.prior_bills);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setPriorBillsError(e instanceof Error ? e.message : String(e));
+          setPriorBills(undefined);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPriorBillsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedDocId,
+    orgId,
+    apiBase,
+    documentViewer?.site_id,
+    documentViewer?.processing_status,
+    documentBill?.site_id,
+    viewerReloadNonce,
+  ]);
+
+  const handleApplySiteToDocument = useCallback(async () => {
+    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+      return;
+    }
+    setAssignSiteBusy(true);
+    setAssignSiteError(null);
+    try {
+      const siteId = assignSiteDraft.trim() || null;
+      await patchDocumentSite(apiBase.trim(), orgId.trim(), selectedDocId, siteId);
+      setViewerReloadNonce((n) => n + 1);
+      if (siteId) {
+        setSelectedSiteId(siteId);
+        storeSiteIdForOrg(orgId.trim(), siteId);
+      }
+    } catch (e) {
+      setAssignSiteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAssignSiteBusy(false);
+    }
+  }, [selectedDocId, orgId, apiBase, assignSiteDraft]);
+
   /** Clear pipeline overlay once extraction finished and fetches are idle. */
   useEffect(() => {
     if (!pipelineHold) {
@@ -557,7 +882,12 @@ export function App() {
     try {
       setPhase("presigning");
       setMessage("Requesting presigned upload…");
-      const presign = await presignUpload(apiBase.trim(), orgId.trim(), file);
+      const presign = await presignUpload(
+        apiBase.trim(),
+        orgId.trim(),
+        file,
+        selectedSiteId.trim() || null,
+      );
 
       setPhase("uploading");
       setMessage("Uploading to object storage…");
@@ -575,7 +905,7 @@ export function App() {
       setPhase("error");
       setMessage(e instanceof Error ? e.message : String(e));
     }
-  }, [apiBase, orgId, file, closeViewer]);
+  }, [apiBase, orgId, file, closeViewer, selectedSiteId]);
 
   const loadDocumentList = useCallback(async () => {
     if (!apiBase.trim() || !orgId.trim()) {
@@ -707,6 +1037,31 @@ export function App() {
     }
   }, [selectedDocId, orgId, apiBase, view, loadDocumentList]);
 
+  const handleDeleteSelected = useCallback(async () => {
+    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+      return;
+    }
+    const ok = window.confirm(
+      "Delete this document from your list?\n\nThe file stays in storage for now (soft delete). You can upload it again later.",
+    );
+    if (!ok) {
+      return;
+    }
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteDocument(apiBase.trim(), orgId.trim(), selectedDocId);
+      closeViewer();
+      if (view === "documents") {
+        void loadDocumentList();
+      }
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [selectedDocId, orgId, apiBase, documentViewer?.document_id, closeViewer, view, loadDocumentList]);
+
   const pageClass = view === "documents" || view === "organizations" ? "page page--wide" : "page";
   const pageWideWithViewer =
     view === "documents" &&
@@ -735,6 +1090,21 @@ export function App() {
     : pipelineStatusBusy
       ? "Document is being processed…"
       : "Updating bill…";
+
+  const viewerSiteProps = {
+    sites: siteRows,
+    assignSiteValue: assignSiteDraft,
+    onAssignSiteValueChange: setAssignSiteDraft,
+    onApplySite: () => void handleApplySiteToDocument(),
+    onDelete: () => void handleDeleteSelected(),
+    assignSiteBusy,
+    assignSiteError,
+    deleteBusy,
+    deleteError,
+    priorBills,
+    priorBillsLoading,
+    priorBillsError,
+  };
 
   return (
     <div className={`${pageClass}${pageWideWithViewer ? " page--viewer" : ""}`}>
@@ -789,15 +1159,80 @@ export function App() {
         </label>
         <p className="hint">
           Set <code>VITE_API_BASE_URL</code> and <code>VITE_ORG_ID</code> in <code>frontend/.env</code> to prefill. Use the
-          Organizations tab to create tenants and copy UUIDs. Open a document with <code>?doc=&lt;uuid&gt;</code> in the URL
-          after choosing this org.
+          Organizations tab to create tenants and copy UUIDs.
         </p>
+        <div className="connection-sites">
+          <h3 className="connection-sites-title">Site (location)</h3>
+          <p className="hint">
+            Bills for the <strong>same site</strong> are compared over time. Pick a site before uploading; assign it on old
+            bills in the document viewer.
+          </p>
+          {siteListError ? <p className="error">{siteListError}</p> : null}
+          <label className="field">
+            <span>Site for uploads</span>
+            <select
+              value={selectedSiteId}
+              disabled={!isUuid(orgId) || siteListLoading || siteRows.length === 0}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSelectedSiteId(v);
+                if (isUuid(orgId)) {
+                  storeSiteIdForOrg(orgId.trim(), v);
+                }
+              }}
+            >
+              <option value="">
+                {siteRows.length === 0 ? "— Create a site below —" : "— Select site —"}
+              </option>
+              {siteRows.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="connection-sites-create">
+            <label className="field field--inline">
+              <span>New site name</span>
+              <input
+                value={newSiteName}
+                onChange={(e) => setNewSiteName(e.target.value)}
+                placeholder="Seattle"
+                disabled={!isUuid(orgId)}
+              />
+            </label>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!isUuid(orgId) || siteCreateBusy}
+              onClick={() => void handleCreateSite()}
+            >
+              {siteCreateBusy ? "Creating…" : "Create site"}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!isUuid(orgId) || siteListLoading}
+              onClick={() => void loadSitesList()}
+            >
+              Refresh sites
+            </button>
+          </div>
+          {siteCreateMessage ? <p className="hint">{siteCreateMessage}</p> : null}
+        </div>
       </section>
 
       {view === "upload" && (
         <>
           <section className="card">
             <h2>File</h2>
+            {selectedSiteId && siteRows.some((s) => s.id === selectedSiteId) ? (
+              <p className="hint">
+                Uploads will use site: <strong>{siteRows.find((s) => s.id === selectedSiteId)?.name}</strong>
+              </p>
+            ) : (
+              <p className="hint">Select or create a site under Connection so bills can be compared by location.</p>
+            )}
             <input
               type="file"
               accept="application/pdf,.pdf"
@@ -890,6 +1325,7 @@ export function App() {
                   selectedDocId === result.document_id
                 }
                 pipelineBusyLabel={pipelineBusyLabel}
+                {...viewerSiteProps}
               />
             </section>
           ) : null}
@@ -971,6 +1407,7 @@ export function App() {
             reprocessError={reprocessError}
             pipelineBusy={pipelineBusy}
             pipelineBusyLabel={pipelineBusyLabel}
+            {...viewerSiteProps}
           />
         </div>
       )}

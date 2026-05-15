@@ -51,6 +51,66 @@ body {
   margin-top: 1.25rem;
 }
 
+.connection-sites {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.connection-sites-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.connection-sites-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  margin-top: 0.5rem;
+}
+
+.field--inline {
+  flex: 1 1 12rem;
+  min-width: 10rem;
+}
+
+.site-select {
+  width: 100%;
+  max-width: 16rem;
+}
+
+.site-assign-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.site-assign-btn {
+  flex-shrink: 0;
+}
+
+.site-assign-error {
+  margin: 0.35rem 0 0;
+  width: 100%;
+}
+
+.prior-bills-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--border);
+}
+
+.prior-bills-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.prior-bills-note {
+  font-size: 0.8rem;
+}
+
 .doc-viewer-card {
   margin-top: 1.25rem;
 }
@@ -401,6 +461,16 @@ button.secondary {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
+}
+
+button.btn-danger {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  border: 1px solid var(--danger);
+  color: var(--text);
+}
+
+button.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 38%, transparent);
 }
 
 .actions-row {

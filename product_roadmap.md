@@ -31,6 +31,8 @@ Just:
 - **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), falls back to **Tesseract OCR** for scan-only PDFs / image MIME types, optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**).
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
 - **Auth:** development-style **organization UUID header** only.
+- **§3a prior bills:** `list_bills_for_site` / `get_prior_bills_for_bill` + **`GET /api/v1/documents/{id}/bill/prior-bills`** (same-org, same-`site_id`; period ordering in eng **3a**).
+- **Document soft delete:** `deleted_at` + **`DELETE /api/v1/documents/{id}`** + UI **Delete** (hard delete / purge later).
 
 ### Still to build for Phase 1 MVP
 
@@ -38,8 +40,24 @@ Just:
 
 ### Recommended next focus (product ↔ eng)
 
-- **§3 comparison** once you have two+ real bills per site (requires **`EXTRACTION_LLM_API_KEY`** or future rules parser for structuring).
-- **OCR quality hardening** — tune OCR thresholds/rendering and increase scan coverage.
+- **§3b** — code-first comparison rules (MoM deltas, new fee lines) on top of **3a** prior-bill queries.
+- **§3d** — persist **`anomalies`** and surface them in the UI (first “useful insight” loop).
+
+### Deferred / optional (later — not blocking MVP demo)
+
+Pick these up when a pilot or ops need pushes them; they are intentionally out of the current sprint.
+
+| Item | Why defer |
+|------|-----------|
+| **`total_amount` on `raw_payload`** | Normalized total is sum-of-lines today; add when we need “amount due” vs line-sum integrity checks. |
+| **`site_id` on upload UI** | API/DB already support `site_id`; wire the picker when comparing bills per location matters for users. |
+| **OCR quality hardening** | Tune DPI/thresholds, rendering, and scan coverage tests when scan-heavy bills fail extraction. |
+| **§3c site-to-site comparables** | After **§3b** works for one site across time. |
+| **§3e comparison backfill job** | Re-run rules when a late bill lands; optimize prior-bill SQL if site history grows large. |
+| **§2e internal raw vs normalized viewer** | Support/debug tool beyond the current debug JSON panel. |
+| **§4b LLM “polish” on explanations** | Ship **§4** with templates first; LLM optional behind a flag. |
+| **Inbound email ingestion (eng 1e–1g)** | Presigned upload + CLI is enough for Phase 1. |
+| **Production auth / RBAC (eng P1–P3)** | Dev `X-Organization-Id` until review workflow needs real users. |
 
 ---
 
