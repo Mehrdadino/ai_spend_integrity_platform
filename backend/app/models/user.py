@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Uuid, func, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    # Forward refs for relationship typing (Pyright); keep imports type-only to avoid cycles.
+    from app.models.anomaly_review_event import AnomalyReviewEvent
+    from app.models.organization import Organization
 
 
 class User(Base):

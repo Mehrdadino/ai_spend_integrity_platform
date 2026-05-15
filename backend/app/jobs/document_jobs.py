@@ -88,11 +88,13 @@ def process_document_pipeline(document_id: str) -> None:
             doc_failed.processing_error = _truncate_error(f"{type(exc).__name__}: {exc}")
             try:
                 session.commit()
+                # ``processing_error`` is nullable; slice only when a string is present.
+                err_snip = (doc_failed.processing_error or "")[:200]
                 logger.warning(
                     "document_jobs: id=%s -> %s err=%s",
                     document_id,
                     PROCESSING_FAILED,
-                    doc_failed.processing_error[:200],
+                    err_snip,
                 )
             except Exception:
                 session.rollback()
