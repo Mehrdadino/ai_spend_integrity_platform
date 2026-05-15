@@ -93,4 +93,8 @@ class Bill(Base):
         "Anomaly",
         back_populates="bill",
         foreign_keys="Anomaly.bill_id",
+        # DB enforces ON DELETE CASCADE on ``anomalies.bill_id``; without passive deletes the ORM
+        # may emit ``UPDATE anomalies SET bill_id = NULL`` when replacing a bill during upsert,
+        # which violates ``bill_id`` NOT NULL (see ``bill_sync.upsert_bill_for_document``).
+        passive_deletes=True,
     )

@@ -1,19 +1,32 @@
-"""§3d org-scoped anomaly list API (comparison findings persisted on compare)."""
+"""§3d anomalies API; §4 explainability; §5 review transitions; batch §3 materialize (inbox Refresh)."""
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_organization
 from app.db.session import get_db
 from app.models.anomaly import Anomaly
 from app.models.organization import Organization
-from app.repositories.anomalies import list_anomalies_for_organization
-from app.schemas.anomalies import AnomalyResponse
+from app.repositories.anomalies import (
+    get_anomaly_for_organization,
+    list_anomalies_for_organization,
+    list_review_events_for_anomaly,
+)
+from app.schemas.anomalies import (
+    AnomalyResponse,
+    AnomalyReviewEventResponse,
+    ExplainabilityResponse,
+    MaterializeComparisonsResponse,
+    ReviewTransitionRequest,
+)
+from app.services.explain import build_explainability_v1
+from app.services.review import ReviewTransitionError, apply_review_transition
+from app.services.comparison.materialize import materialize_comparisons_for_organization
 
 router = APIRouter(prefix="/anomalies", tags=["anomalies"])
 
@@ -23,21 +36,137 @@ def list_anomalies(
     db: Session = Depends(get_db),
     org: Organization = Depends(require_organization),
     site_id: Optional[UUID] = Query(None, description="Optional ``sites.id`` filter (same-org)."),
-    limit: int = Query(100, ge=1, le=500, description="Max rows (newest first)."),
+    review_status: Optional[str] = Query(
+        None,
+        description="§5 filter: ``open`` | ``approved`` | ``dismissed`` | ``flagged``.",
+    ),
+    sort: Literal["created_at", "updated_at", "severity"] = Query(
+        "created_at",
+        description="Sort key (severity uses critical > warning > info).",
+    ),
+    order: Literal["asc", "desc"] = Query("desc"),
+    limit: int = Query(100, ge=1, le=500, description="Max rows returned."),
 ) -> list[AnomalyResponse]:
-    """Return persisted §3 comparison signals for dashboards (excluding soft-deleted documents)."""
+    """Return persisted §3 comparison signals with §4 narratives and §5 review status."""
     rows = list_anomalies_for_organization(
         db,
         organization_id=org.id,
         site_id=site_id,
+        review_status=review_status,
+        sort=sort,
+        order=order,
         limit=limit,
     )
     return [_to_response(row) for row in rows]
 
 
+@router.post("/materialize-comparisons", response_model=MaterializeComparisonsResponse)
+def post_materialize_comparisons(
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+    site_id: Optional[UUID] = Query(
+        None,
+        description="Optional ``sites.id`` scope (match Anomalies list filter / Connection picker).",
+    ),
+    limit: int = Query(200, ge=1, le=500, description="Max documents to run comparison on."),
+) -> MaterializeComparisonsResponse:
+    """Run §3b comparison for every extracted document with a bill (inbox **Refresh** path).
+
+    Same persistence as ``GET …/documents/{id}/bill/comparison`` per document; no viewer required.
+    """
+    ok, failed = materialize_comparisons_for_organization(
+        db,
+        organization_id=org.id,
+        site_id=site_id,
+        limit=limit,
+    )
+    return MaterializeComparisonsResponse(
+        attempted=len(ok) + len(failed),
+        succeeded=len(ok),
+        failed=len(failed),
+    )
+
+
+@router.post("/{anomaly_id}/review", response_model=AnomalyResponse)
+def post_anomaly_review(
+    anomaly_id: UUID,
+    body: ReviewTransitionRequest,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> AnomalyResponse:
+    """§5a: transition workflow state and append an audit row (§5b)."""
+    row = get_anomaly_for_organization(db, organization_id=org.id, anomaly_id=anomaly_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Anomaly not found")
+    try:
+        apply_review_transition(
+            db,
+            anomaly=row,
+            to_status=body.to_status,
+            note=body.note,
+            actor_user_id=None,
+        )
+    except ReviewTransitionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.refresh(row)
+    return _to_response(row)
+
+
+@router.get("/{anomaly_id}/review-events", response_model=list[AnomalyReviewEventResponse])
+def get_anomaly_review_events(
+    anomaly_id: UUID,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> list[AnomalyReviewEventResponse]:
+    """§5b: append-only history for one anomaly."""
+    parent = get_anomaly_for_organization(db, organization_id=org.id, anomaly_id=anomaly_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Anomaly not found")
+    events = list_review_events_for_anomaly(
+        db,
+        organization_id=org.id,
+        anomaly_id=anomaly_id,
+    )
+    return [
+        AnomalyReviewEventResponse(
+            id=e.id,
+            anomaly_id=e.anomaly_id,
+            from_status=e.from_status,
+            to_status=e.to_status,
+            note=e.note,
+            actor_user_id=e.actor_user_id,
+            created_at=e.created_at,
+        )
+        for e in events
+    ]
+
+
+@router.get("/{anomaly_id}", response_model=AnomalyResponse)
+def get_anomaly(
+    anomaly_id: UUID,
+    db: Session = Depends(get_db),
+    org: Organization = Depends(require_organization),
+) -> AnomalyResponse:
+    """Single anomaly read model (§4d + §5 status)."""
+    row = get_anomaly_for_organization(db, organization_id=org.id, anomaly_id=anomaly_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Anomaly not found")
+    return _to_response(row)
+
+
 def _to_response(row: Anomaly) -> AnomalyResponse:
-    """Map ORM + optional ``site`` projection to HTTP model."""
+    """Map ORM row + template explainability to HTTP model."""
     site_name = row.site.name if row.site is not None else None
+    ev = dict(row.evidence) if row.evidence is not None else {}
+    ex = build_explainability_v1(
+        rule_id=row.rule_id,
+        severity=row.severity,
+        evidence=ev,
+        summary=row.summary,
+    )
+    rs = row.review_status
+    if rs not in ("open", "approved", "dismissed", "flagged"):
+        rs = "open"
     return AnomalyResponse(
         id=row.id,
         organization_id=row.organization_id,
@@ -53,7 +182,14 @@ def _to_response(row: Anomaly) -> AnomalyResponse:
         severity=row.severity,
         title=row.title,
         summary=row.summary,
-        evidence=dict(row.evidence) if row.evidence is not None else {},
+        evidence=ev,
+        explainability=ExplainabilityResponse(
+            explanation=ex.explanation,
+            confidence=ex.confidence,
+            reasons=list(ex.reasons),
+            version=ex.version,
+        ),
+        review_status=rs,  # type: ignore[arg-type]
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

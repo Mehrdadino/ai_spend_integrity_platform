@@ -28,3 +28,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization"] = relationship("Organization", back_populates="users")
+    anomaly_review_events: Mapped[list["AnomalyReviewEvent"]] = relationship(
+        "AnomalyReviewEvent",
+        back_populates="actor",
+    )

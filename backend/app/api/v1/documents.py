@@ -43,6 +43,10 @@ from app.schemas.documents import (
     ReprocessDocumentResponse,
 )
 from app.services.document_soft_delete import soft_delete_document
+from app.services.comparison_queue import (
+    enqueue_document_comparison_backfill_safe,
+    enqueue_site_comparison_refresh_safe,
+)
 from app.services.document_pipeline_queue import enqueue_document_pipeline_safe
 from app.services.document_read_urls import presigned_get_url_for_document
 from app.services.document_reprocess import (
@@ -286,10 +290,13 @@ def get_document_prior_bills(
 def patch_document_site(
     document_id: UUID,
     body: PatchDocumentSiteRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     org: Organization = Depends(require_organization),
 ) -> PatchDocumentSiteResponse:
     """Assign a site to this document (and bill) for §3 historical comparison."""
+    bill_before = get_bill_for_org_document(db, organization_id=org.id, document_id=document_id)
+    old_site_id = bill_before.site_id if bill_before is not None else None
     try:
         doc = assign_site_to_document(
             db,
@@ -300,6 +307,11 @@ def patch_document_site(
     except DocumentSiteAssignmentError as exc:
         status = 404 if "not found" in exc.detail.lower() else 400
         raise HTTPException(status_code=status, detail=exc.detail) from exc
+    new_site_id = doc.site_id
+    # §3e: priors change for this bill and sometimes for neighbors on old/new sites.
+    background_tasks.add_task(enqueue_document_comparison_backfill_safe, doc.id)
+    if old_site_id is not None and new_site_id != old_site_id:
+        background_tasks.add_task(enqueue_site_comparison_refresh_safe, org.id, old_site_id)
     return PatchDocumentSiteResponse(document_id=doc.id, site_id=doc.site_id)
 
 

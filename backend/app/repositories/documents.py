@@ -13,6 +13,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.bill import Bill
 from app.models.document import Document
 
 
@@ -37,6 +38,33 @@ def list_documents_for_organization(
         .order_by(Document.created_at.desc())
         .limit(limit)
     )
+    return list(session.scalars(stmt).all())
+
+
+def list_extracted_document_ids_with_bills(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    site_id: Optional[uuid.UUID] = None,
+    limit: int = 200,
+) -> list[uuid.UUID]:
+    """Document IDs that have a normalized bill and worker status ``extracted`` (§3d inputs).
+
+    Used to batch-run ``GET …/bill/comparison`` logic without opening each document in the UI.
+    When ``site_id`` is set, restricts to documents assigned to that site (matches inbox filter).
+    """
+    stmt = (
+        select(Document.id)
+        .join(Bill, Bill.document_id == Document.id)
+        .where(
+            *_active_document_filters(organization_id),
+            Document.processing_status == "extracted",
+        )
+        .order_by(Document.created_at.desc())
+        .limit(max(1, min(limit, 500)))
+    )
+    if site_id is not None:
+        stmt = stmt.where(Document.site_id == site_id)
     return list(session.scalars(stmt).all())
 
 

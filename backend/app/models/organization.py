@@ -25,3 +25,7 @@ class Organization(Base):
     documents: Mapped[list["Document"]] = relationship("Document", back_populates="organization")
     bills: Mapped[list["Bill"]] = relationship("Bill", back_populates="organization")
     anomalies: Mapped[list["Anomaly"]] = relationship("Anomaly", back_populates="organization")
+    anomaly_review_events: Mapped[list["AnomalyReviewEvent"]] = relationship(
+        "AnomalyReviewEvent",
+        back_populates="organization",
+    )

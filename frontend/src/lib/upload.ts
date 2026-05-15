@@ -146,6 +146,14 @@ export interface DocumentComparisonResponse {
   findings: ComparisonFindingResponse[];
 }
 
+/** §4 template narrative + confidence (from ``GET /api/v1/anomalies``). */
+export interface ExplainabilityResponse {
+  explanation: string;
+  confidence: "high" | "medium" | "low";
+  reasons: string[];
+  version: string;
+}
+
 /** One persisted comparison signal (``GET /api/v1/anomalies``). */
 export interface AnomalyResponse {
   id: string;
@@ -163,9 +171,13 @@ export interface AnomalyResponse {
   title: string;
   summary: string;
   evidence: Record<string, unknown>;
+  explainability: ExplainabilityResponse;
+  review_status: "open" | "approved" | "dismissed" | "flagged";
   created_at: string;
   updated_at: string;
 }
+
+export type AnomalyReviewStatus = "open" | "approved" | "dismissed" | "flagged";
 
 export interface PatchDocumentSiteResponse {
   document_id: string;
@@ -327,9 +339,17 @@ export async function fetchDocumentComparison(
   orgId: string,
   documentId: string,
 ): Promise<DocumentComparisonResponse> {
-  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill/comparison`, {
-    headers: { "X-Organization-Id": orgId },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill/comparison`, {
+      headers: { "X-Organization-Id": orgId },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `Bill comparison request failed (${msg}). Check API URL, CORS, and that the backend is running.`,
+    );
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Bill comparison failed (${res.status}): ${body}`);
@@ -337,16 +357,55 @@ export async function fetchDocumentComparison(
   return res.json() as Promise<DocumentComparisonResponse>;
 }
 
-/** §3d anomaly inbox (newest first); optional ``siteId`` filter. */
-export async function fetchAnomaliesList(
+export interface MaterializeComparisonsResponse {
+  attempted: number;
+  succeeded: number;
+  failed: number;
+}
+
+/** Batch §3b/§3d for extracted docs with bills (Anomalies tab Refresh — no per-doc viewer). */
+export async function postMaterializeAnomalyComparisons(
   apiBase: string,
   orgId: string,
   opts?: { siteId?: string | null; limit?: number },
+): Promise<MaterializeComparisonsResponse> {
+  const params = new URLSearchParams();
+  params.set("limit", String(opts?.limit ?? 200));
+  if (opts?.siteId) {
+    params.set("site_id", opts.siteId);
+  }
+  const res = await fetch(`${apiBase}/api/v1/anomalies/materialize-comparisons?${params}`, {
+    method: "POST",
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Materialize comparisons failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<MaterializeComparisonsResponse>;
+}
+
+/** §3d anomaly inbox; §5c optional ``reviewStatus`` / sort. */
+export async function fetchAnomaliesList(
+  apiBase: string,
+  orgId: string,
+  opts?: {
+    siteId?: string | null;
+    reviewStatus?: AnomalyReviewStatus | "" | null;
+    sort?: "created_at" | "updated_at" | "severity";
+    order?: "asc" | "desc";
+    limit?: number;
+  },
 ): Promise<AnomalyResponse[]> {
   const params = new URLSearchParams({ limit: String(opts?.limit ?? 100) });
   if (opts?.siteId) {
     params.set("site_id", opts.siteId);
   }
+  if (opts?.reviewStatus) {
+    params.set("review_status", opts.reviewStatus);
+  }
+  params.set("sort", opts?.sort ?? "created_at");
+  params.set("order", opts?.order ?? "desc");
   const res = await fetch(`${apiBase}/api/v1/anomalies?${params}`, {
     headers: { "X-Organization-Id": orgId },
   });
@@ -355,6 +414,37 @@ export async function fetchAnomaliesList(
     throw new Error(`Anomalies list failed (${res.status}): ${body}`);
   }
   return res.json() as Promise<AnomalyResponse[]>;
+}
+
+/** Single anomaly + §4 explainability (detail drawer). */
+export async function fetchAnomaly(apiBase: string, orgId: string, anomalyId: string): Promise<AnomalyResponse> {
+  const res = await fetch(`${apiBase}/api/v1/anomalies/${anomalyId}`, {
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Anomaly fetch failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<AnomalyResponse>;
+}
+
+/** §5a: transition review state (audit row on server). */
+export async function postAnomalyReview(
+  apiBase: string,
+  orgId: string,
+  anomalyId: string,
+  body: { to_status: AnomalyReviewStatus; note?: string | null },
+): Promise<AnomalyResponse> {
+  const res = await fetch(`${apiBase}/api/v1/anomalies/${anomalyId}/review`, {
+    method: "POST",
+    headers: orgHeaders(orgId),
+    body: JSON.stringify({ to_status: body.to_status, note: body.note ?? null }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Review transition failed (${res.status}): ${text}`);
+  }
+  return res.json() as Promise<AnomalyResponse>;
 }
 
 /** Older bills for the same site (§3a). */

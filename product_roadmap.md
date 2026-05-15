@@ -20,7 +20,7 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-15
+## Implementation status (repository) — 2026-05-16 (anomalies inbox Refresh)
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
@@ -32,17 +32,23 @@ Just:
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
 - **Auth:** development-style **organization UUID header** only.
 - **§3a prior bills:** `list_bills_for_site` / `get_prior_bills_for_bill` + **`GET /api/v1/documents/{id}/bill/prior-bills`** (same-org, same-`site_id`; period ordering in eng **3a**).
-- **§3b + §3d:** **`GET …/bill/comparison`** (MoM, new fees, header mismatch) and **`GET /api/v1/anomalies`**; findings persist automatically when comparison runs (**Anomalies** tab + site filter from Connection).
+- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; **`GET /api/v1/anomalies`** returns **template explanations** + **grounding tiers** from saved evidence; **`GET …/anomalies/{id}`** for detail; **`POST /api/v1/anomalies/materialize-comparisons`** runs the same comparison for every finished document in the org (optional site filter) so the **Anomalies** tab **Refresh** can populate the list **without opening each document**.
+- **§5 review workflow:** Alembic **`009_anomaly_review`** adds **`review_status`** + audit **`anomaly_review_events`**; **`POST /api/v1/anomalies/{id}/review`** transitions state; inbox **Review status** filter and per-row **Actions** (approve / dismiss / flag / reopen).
+- **§3e comparison backfill:** After the worker materializes a normalized bill, an RQ job runs the same comparison path as **`GET …/bill/comparison`** for the document (and same-site neighbors when priors can shift). Changing a document’s **site** triggers backfill plus a refresh pass for bills left on the **previous** site (when applicable).
 - **Document soft delete:** `deleted_at` + **`DELETE /api/v1/documents/{id}`** + UI **Delete** (hard delete / purge later).
 
 ### Still to build for Phase 1 MVP
 
-**Remaining Phase 1 comparison breadth** (**§3c** site-to-site when needed, **§3e** comparison backfill at scale), **explainability** (§4), **review workflow** (§5), and production auth — plus hardening on **real** structured bills across long histories.
+**Remaining comparison breadth** (**§3c** is scoped as future work — see below), production auth, optional **§5e** notes in the inbox UI, and **§3e** operational hardening (very large per-site histories) — plus hardening on **real** structured bills across long histories. (Template §4 is shipped; optional LLM wording polish can follow.)
 
 ### Recommended next focus (product ↔ eng)
 
-- **§3e / §3c** — backfill comparisons when older bills arrive; optional site-to-site rules when categories align.
-- **§4** — grounded explanations atop persisted **`anomalies`** (+ stored metrics/evidence snapshots).
+- **§5e** — optional transition notes in the UI (API may already accept `note`).
+- **§3e tuning** — faster/bigger prior-bill queries when one site accumulates many bills.
+
+### Possible future work (comparison breadth)
+
+- **§3c — site-to-site comparables:** compare normalized usage/charges across locations when categories and units align, with explicit “not comparable” outcomes. **Not started**; ship only when a pilot needs cross-location views (see [`eng_roadmap.md`](eng_roadmap.md) §0.0).
 
 ### Deferred / optional (later — not blocking MVP demo)
 
@@ -53,8 +59,8 @@ Pick these up when a pilot or ops need pushes them; they are intentionally out o
 | **`total_amount` on `raw_payload`** | Normalized total is sum-of-lines today; add when we need “amount due” vs line-sum integrity checks. |
 | **`site_id` on upload UI** | API/DB already support `site_id`; wire the picker when comparing bills per location matters for users. |
 | **OCR quality hardening** | Tune DPI/thresholds, rendering, and scan coverage tests when scan-heavy bills fail extraction. |
-| **§3c site-to-site comparables** | After **§3b** works for one site across time. |
-| **§3e comparison backfill job** | Re-run rules when a late bill lands; optimize prior-bill SQL if site history grows large. |
+| **§3c site-to-site comparables** | See **Possible future work** above; eng step **3c** not implemented. |
+| **§3e at scale** | Tuning when a site has very many bills (indexed SQL, higher scan caps); core backfill is shipped. |
 | **§2e internal raw vs normalized viewer** | Support/debug tool beyond the current debug JSON panel. |
 | **§4b LLM “polish” on explanations** | Ship **§4** with templates first; LLM optional behind a flag. |
 | **Inbound email ingestion (eng 1e–1g)** | Presigned upload + CLI is enough for Phase 1. |

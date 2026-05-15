@@ -24,6 +24,9 @@ def evaluate_document_comparison(
 
     When a normalized bill exists, §3d rows for ``RULE_PACK_VERSION`` are replaced for that bill so
     the inbox stays aligned with the latest comparison run (typically via ``GET …/bill/comparison``).
+
+    Bill PKs are copied before the anomaly replace + flush so the response does not rely on an
+    ORM instance that may be expired after persistence.
     """
     current, priors = get_prior_bills_for_org_document(
         session,
@@ -42,6 +45,10 @@ def evaluate_document_comparison(
             findings=[],
         )
 
+    # Snapshot ids before §3d replace + flush so we never read a potentially expired ``Bill``.
+    bill_pk = current.id
+    site_pk = current.site_id
+
     findings, compared_id = evaluate_rule_pack_v1(current=current, priors=priors)
     compared_period = None
     if compared_id is not None and priors:
@@ -57,8 +64,8 @@ def evaluate_document_comparison(
 
     return DocumentComparisonResponse(
         document_id=document_id,
-        bill_id=current.id,
-        site_id=current.site_id,
+        bill_id=bill_pk,
+        site_id=site_pk,
         rule_pack_version=RULE_PACK_VERSION,
         compared_to_bill_id=compared_id,
         compared_to_period_end=compared_period,

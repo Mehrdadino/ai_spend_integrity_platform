@@ -30,6 +30,12 @@ def replace_anomalies_for_comparison(
     """Delete existing snapshot rows then insert anomalies derived from ``findings``.
 
     ``current`` must be the normalized bill instance (rule pack callers load ``line_items``).
+
+    Use a Core ``DELETE`` (no pre-load) when the session has not already attached ``Anomaly``
+    rows for this bill—typical for ``GET …/bill/comparison``. That avoids loading rows into
+    the identity map; ``Bill.anomalies`` uses ``passive_deletes`` so bill replacement does not
+    emit invalid ``UPDATE anomalies SET bill_id = NULL``. Do **not** pair Core deletes with
+    ``session.expire_all()`` (that expired the live ``Bill`` and led to bad flushes).
     """
     session.execute(
         delete(Anomaly).where(
@@ -100,6 +106,7 @@ def _flatten_findings_into_rows(
                 title=finding.title,
                 summary=finding.summary,
                 evidence=dict(finding.evidence),
+                review_status="open",
             )
         )
 
@@ -133,6 +140,7 @@ def _expand_new_fee_lines(
                 title=finding.title,
                 summary=finding.summary,
                 evidence=dict(finding.evidence),
+                review_status="open",
             )
         ]
 
@@ -175,6 +183,7 @@ def _expand_new_fee_lines(
                 title="New fee line vs prior bill",
                 summary=summary_one,
                 evidence=ev,
+                review_status="open",
             )
         )
 
@@ -196,6 +205,7 @@ def _expand_new_fee_lines(
                 title=finding.title,
                 summary=finding.summary,
                 evidence=dict(finding.evidence),
+                review_status="open",
             )
         )
 

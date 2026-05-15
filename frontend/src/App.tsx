@@ -1,8 +1,8 @@
 /**
- * Phase 1 ingestion UI: presigned upload, document list, anomaly inbox, viewer (bill + comparison).
+ * Phase 1 ingestion UI: presigned upload, document list, anomaly inbox (§5 review actions), viewer (bill + comparison).
  * Visual design: glass nav, gradient chrome, high-legibility type (Plus Jakarta Sans).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   createOrganization,
   fetchOrganizationsList,
@@ -19,9 +19,12 @@ import {
   fetchDocumentViewer,
   fetchDocumentsList,
   patchDocumentSite,
+  postAnomalyReview,
+  postMaterializeAnomalyComparisons,
   presignUpload,
   putFileToPresignedUrl,
   reprocessDocument,
+  type AnomalyReviewStatus,
   type BillResponse,
   type CompleteUploadResponse,
   type DocumentListItemResponse,
@@ -97,6 +100,87 @@ function comparisonSeverityLabel(severity: string): string {
     default:
       return severity;
   }
+}
+
+/** Confidence tier label for §4 anomaly inbox (heuristic grounding, not stats). */
+function explainConfidenceLabel(tier: string): string {
+  switch (tier) {
+    case "high":
+      return "Grounding: high";
+    case "medium":
+      return "Grounding: medium";
+    case "low":
+      return "Grounding: low";
+    default:
+      return tier;
+  }
+}
+
+/** §5 workflow label for anomaly inbox. */
+function reviewStatusLabel(status: string): string {
+  switch (status) {
+    case "open":
+      return "Open";
+    case "approved":
+      return "Approved";
+    case "dismissed":
+      return "Dismissed";
+    case "flagged":
+      return "Flagged";
+    default:
+      return status;
+  }
+}
+
+/** §5a row actions — buttons stop row navigation via handler. */
+function AnomalyReviewActions({
+  row,
+  busy,
+  onReview,
+}: {
+  row: AnomalyResponse;
+  busy: boolean;
+  onReview: (e: MouseEvent<HTMLButtonElement>, anomalyId: string, to: AnomalyReviewStatus) => void;
+}) {
+  const s = row.review_status;
+  const mk = (label: string, to: AnomalyReviewStatus, classExtra?: string) => (
+    <button
+      type="button"
+      key={`${row.id}-${to}`}
+      className={`secondary anomaly-action-btn${classExtra ? ` ${classExtra}` : ""}`}
+      disabled={busy}
+      onClick={(e) => onReview(e, row.id, to)}
+    >
+      {label}
+    </button>
+  );
+  if (s === "open") {
+    return (
+      <div className="anomaly-actions">
+        {mk("Approve", "approved")}
+        {mk("Dismiss", "dismissed")}
+        {mk("Flag", "flagged", "anomaly-action-btn--flag")}
+      </div>
+    );
+  }
+  if (s === "flagged") {
+    return (
+      <div className="anomaly-actions">
+        {mk("Approve", "approved")}
+        {mk("Dismiss", "dismissed")}
+        {mk("Open", "open")}
+      </div>
+    );
+  }
+  if (s === "approved" || s === "dismissed") {
+    return (
+      <div className="anomaly-actions">
+        {mk("Open", "open")}
+        {mk("Flag", "flagged", "anomaly-action-btn--flag")}
+      </div>
+    );
+  }
+  return <div className="anomaly-actions" />;
 }
 
 function storeSiteIdForOrg(orgId: string, siteId: string): void {
@@ -304,6 +388,9 @@ function DocumentViewerPanel({
               {reprocessBusy ? "Reprocessing…" : "Reprocess"}
             </button>
           ) : null}
+          <button type="button" className="secondary" onClick={onClose}>
+            Close
+          </button>
           {onDelete ? (
             <button
               type="button"
@@ -315,9 +402,6 @@ function DocumentViewerPanel({
               {deleteBusy ? "Deleting…" : "Delete"}
             </button>
           ) : null}
-          <button type="button" className="secondary" onClick={onClose}>
-            Close
-          </button>
         </div>
       </div>
       {reprocessError ? <p className="error">{reprocessError}</p> : null}
@@ -543,7 +627,7 @@ function DocumentViewerPanel({
               ) : null}
               {!comparisonLoading && comparison && comparison.findings.length === 0 && bill ? (
                 <p className="comparison-empty">
-                  All clear: nothing unusual vs your previous bill, or there isn&apos;t a prior bill at this site yet.
+                  All clear: nothing unusual found for this bill.
                 </p>
               ) : null}
               {!comparisonLoading && comparison && comparison.findings.length > 0 ? (
@@ -659,6 +743,9 @@ export function App() {
   const [anomalyRows, setAnomalyRows] = useState<AnomalyResponse[]>([]);
   const [anomalyListLoading, setAnomalyListLoading] = useState(false);
   const [anomalyListError, setAnomalyListError] = useState<string | null>(null);
+  /** §5c inbox filter: empty string = all statuses. */
+  const [anomalyReviewFilter, setAnomalyReviewFilter] = useState<string>("");
+  const [anomalyReviewBusyId, setAnomalyReviewBusyId] = useState<string | null>(null);
   /** Keep spinner visible from reprocess click until worker finishes and bill refetch settles. */
   const [pipelineHold, setPipelineHold] = useState(false);
   const loadedViewerDocIdRef = useRef<string | null>(null);
@@ -1036,27 +1123,58 @@ export function App() {
     }
   }, [apiBase, orgId]);
 
-  const loadAnomalyList = useCallback(async () => {
-    if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
-      setAnomalyRows([]);
+  const loadAnomalyList = useCallback(
+    async (opts?: { materializeFirst?: boolean }) => {
+      if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+        setAnomalyRows([]);
+        setAnomalyListError(null);
+        return;
+      }
       setAnomalyListError(null);
-      return;
-    }
-    setAnomalyListError(null);
-    setAnomalyListLoading(true);
-    try {
-      const rows = await fetchAnomaliesList(apiBase.trim(), orgId.trim(), {
-        siteId: selectedSiteId || undefined,
-        limit: 200,
-      });
-      setAnomalyRows(rows);
-    } catch (e) {
-      setAnomalyListError(e instanceof Error ? e.message : String(e));
-      setAnomalyRows([]);
-    } finally {
-      setAnomalyListLoading(false);
-    }
-  }, [apiBase, orgId, selectedSiteId]);
+      setAnomalyListLoading(true);
+      try {
+        if (opts?.materializeFirst) {
+          await postMaterializeAnomalyComparisons(apiBase.trim(), orgId.trim(), {
+            siteId: selectedSiteId || undefined,
+            limit: 200,
+          });
+        }
+        const rows = await fetchAnomaliesList(apiBase.trim(), orgId.trim(), {
+          siteId: selectedSiteId || undefined,
+          reviewStatus: anomalyReviewFilter ? (anomalyReviewFilter as AnomalyReviewStatus) : undefined,
+          limit: 200,
+        });
+        setAnomalyRows(rows);
+      } catch (e) {
+        setAnomalyListError(e instanceof Error ? e.message : String(e));
+        setAnomalyRows([]);
+      } finally {
+        setAnomalyListLoading(false);
+      }
+    },
+    [apiBase, orgId, selectedSiteId, anomalyReviewFilter],
+  );
+
+  const handleAnomalyReview = useCallback(
+    async (e: MouseEvent<HTMLButtonElement>, anomalyId: string, toStatus: AnomalyReviewStatus) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+        return;
+      }
+      setAnomalyReviewBusyId(anomalyId);
+      setAnomalyListError(null);
+      try {
+        await postAnomalyReview(apiBase.trim(), orgId.trim(), anomalyId, { to_status: toStatus });
+        await loadAnomalyList();
+      } catch (err) {
+        setAnomalyListError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setAnomalyReviewBusyId(null);
+      }
+    },
+    [apiBase, orgId, loadAnomalyList],
+  );
 
   const goToDocuments = useCallback(() => {
     setView("documents");
@@ -1613,19 +1731,44 @@ export function App() {
         <section className="card">
           <div className="doc-list-toolbar">
             <h2>Saved comparison signals</h2>
-            <button type="button" disabled={anomalyListLoading} onClick={() => void loadAnomalyList()}>
-              {anomalyListLoading ? "Loading…" : "Refresh"}
-            </button>
+            <div className="anomaly-toolbar-controls">
+              <label className="field field--inline anomaly-filter-field">
+                <span>Review status</span>
+                <select
+                  value={anomalyReviewFilter}
+                  onChange={(e) => setAnomalyReviewFilter(e.target.value)}
+                  aria-label="Filter anomalies by review status"
+                >
+                  <option value="">All</option>
+                  <option value="open">Open</option>
+                  <option value="approved">Approved</option>
+                  <option value="dismissed">Dismissed</option>
+                  <option value="flagged">Flagged</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={anomalyListLoading}
+                onClick={() => void loadAnomalyList({ materializeFirst: true })}
+              >
+                {anomalyListLoading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
           </div>
           <p className="doc-list-lede">
-            Rows are written when you open a document and the app runs §3b comparison (
-            <code>/bill/comparison</code>). Use the site picker under Connection to filter this list.
+            Rows are written when the backend runs §3b comparison (
+            <code>/bill/comparison</code>). Use <strong>Refresh</strong> to run comparison on all
+            finished bills for this org (and selected site, if any), then reload the list—no need to
+            open each document first. §4 adds a template explanation and grounding tier from saved
+            evidence. §5 adds review status and row actions. Use the site picker under Connection
+            to filter this list.
           </p>
           {anomalyListError ? <p className="error">{anomalyListError}</p> : null}
           {!anomalyListError && !anomalyListLoading && anomalyRows.length === 0 ? (
             <p className="hint">
-              No anomalies yet. Normalize at least one bill per document, then view it (with an assigned site) so comparison
-              runs and persists rows here.
+              No anomalies yet. Bills must be normalized (<code>extracted</code>) with a site when you
+              care about same-site history. Click <strong>Refresh</strong> to run comparison for all
+              eligible documents and load this list, or open a document to run comparison for that bill only.
             </p>
           ) : null}
           {anomalyRows.length > 0 ? (
@@ -1635,9 +1778,13 @@ export function App() {
                   <tr>
                     <th>When</th>
                     <th>Severity</th>
+                    <th>Grounding</th>
                     <th>Rule</th>
                     <th>Site</th>
+                    <th>Explanation</th>
                     <th>Summary</th>
+                    <th>Review</th>
+                    <th>Actions</th>
                     <th>Document</th>
                   </tr>
                 </thead>
@@ -1655,6 +1802,7 @@ export function App() {
                       }}
                       tabIndex={0}
                       role="button"
+                      title={row.explainability.reasons.length ? row.explainability.reasons.join(" ") : undefined}
                       aria-label={`Open document for anomaly ${row.id}`}
                     >
                       <td>{new Date(row.updated_at).toLocaleString()}</td>
@@ -1663,9 +1811,33 @@ export function App() {
                           {comparisonSeverityLabel(row.severity)}
                         </span>
                       </td>
+                      <td>
+                        <span
+                          className={`confidence-pill confidence-pill--${row.explainability.confidence}`}
+                          title={row.explainability.version}
+                        >
+                          {explainConfidenceLabel(row.explainability.confidence)}
+                        </span>
+                      </td>
                       <td className="cell-mono">{row.rule_id}</td>
                       <td>{row.site_name ?? (row.site_id ? row.site_id : "—")}</td>
+                      <td className="anomaly-explanation-cell">{row.explainability.explanation}</td>
                       <td>{row.summary}</td>
+                      <td>
+                        <span className={`review-status-pill review-status-pill--${row.review_status}`}>
+                          {reviewStatusLabel(row.review_status)}
+                        </span>
+                      </td>
+                      <td
+                        className="anomaly-actions-cell"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <AnomalyReviewActions
+                          row={row}
+                          busy={anomalyReviewBusyId === row.id}
+                          onReview={handleAnomalyReview}
+                        />
+                      </td>
                       <td className="cell-mono cell-id">{row.document_id}</td>
                     </tr>
                   ))}

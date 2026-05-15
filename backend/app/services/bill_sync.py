@@ -3,6 +3,11 @@
 Exactly one ``Bill`` row exists per ``document_id``; each successful pipeline run
 replaces lines so reprocessing stays idempotent. Postgres stores bytes in S3;
 this module only touches relational bill state scoped by ``document``.
+
+When an existing bill row is replaced, ``session.delete`` relies on Postgres
+``ON DELETE CASCADE`` into ``anomalies``; ``Bill.anomalies`` uses ``passive_deletes``
+so SQLAlchemy does not emit ``UPDATE anomalies SET bill_id = NULL`` (``bill_id`` is
+NOT NULL).
 """
 
 from __future__ import annotations

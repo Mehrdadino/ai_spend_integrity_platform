@@ -16,6 +16,9 @@ Or: ``python -m app.scripts.run_rq_worker``
 
 from __future__ import annotations
 
+# Ensure RQ can unpickle §3e job callables in the worker process.
+import app.jobs.comparison_jobs  # noqa: F401
+
 import logging
 import os
 import sys

@@ -334,6 +334,41 @@ body {
   color: var(--muted);
 }
 
+/* §4 anomaly inbox: heuristic “how complete is the stored evidence?” — not statistical confidence. */
+.confidence-pill {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.confidence-pill--high {
+  background: color-mix(in srgb, var(--ok) 55%, #fff);
+  color: var(--ok-ink, #065f46);
+}
+
+.confidence-pill--medium {
+  background: #fcd34d;
+  color: var(--warn-ink);
+}
+
+.confidence-pill--low {
+  background: color-mix(in srgb, var(--muted) 45%, var(--panel));
+  color: var(--text);
+}
+
+.anomaly-explanation-cell {
+  max-width: 22rem;
+  font-size: 0.86rem;
+  line-height: 1.42;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  white-space: normal;
+}
+
 .prior-bills-section {
   margin-top: 1.25rem;
   padding: 1rem 1rem 1.1rem;
@@ -805,6 +840,15 @@ button.btn-danger:hover:not(:disabled) {
   filter: brightness(1.05);
 }
 
+/* Placed after global ``button.secondary`` so it wins: form margin must not shift Close / Reprocess vs Delete. */
+.doc-viewer-toolbar-actions button.secondary {
+  margin-top: 0;
+}
+
+.doc-viewer-toolbar-actions button {
+  margin-top: 0;
+}
+
 .actions-row {
   display: flex;
   flex-wrap: wrap;
@@ -851,6 +895,72 @@ button.btn-danger:hover:not(:disabled) {
   font-size: 1.12rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+}
+
+/* §5 anomaly inbox: filter + compact row action buttons */
+.anomaly-toolbar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.65rem 0.85rem;
+}
+
+.anomaly-filter-field {
+  min-width: 10rem;
+}
+
+.anomaly-actions-cell {
+  white-space: nowrap;
+  min-width: 8rem;
+}
+
+.anomaly-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.anomaly-action-btn {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
+  margin: 0;
+}
+
+.anomaly-action-btn--flag {
+  border-color: rgba(255, 180, 120, 0.45);
+  color: #ffc48a;
+}
+
+.review-status-pill {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.review-status-pill--open {
+  border-color: rgba(79, 156, 255, 0.45);
+  color: var(--accent-bright);
+}
+
+.review-status-pill--approved {
+  border-color: rgba(110, 231, 168, 0.4);
+  color: var(--ok);
+}
+
+.review-status-pill--dismissed {
+  color: var(--muted);
+}
+
+.review-status-pill--flagged {
+  border-color: rgba(255, 180, 120, 0.45);
+  color: #ffc48a;
 }
 
 .doc-list-lede {

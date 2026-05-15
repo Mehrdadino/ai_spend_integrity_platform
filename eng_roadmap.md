@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-15 (§3d anomalies persistence)  
+**Last updated:** 2026-05-16 (``POST /anomalies/materialize-comparisons`` + inbox Refresh)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -18,25 +18,27 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | Area | What exists today |
 |------|---------------------|
 | **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**). |
-| **Backend (`backend/`)** | FastAPI; Alembic through **`008_anomalies`**; ORM: orgs, sites, documents, **`document_raw_extractions`**, **`bills`**, **`bill_line_items`**, **`anomalies`**. *Not yet:* review audit. |
+| **Backend (`backend/`)** | FastAPI; Alembic **`008_anomalies`** + **`009_anomaly_review`** (`anomalies.review_status`, **`anomaly_review_events`**); ORM + **`app/services/review/`** (transitions); **`app/services/explain/`** (§4 templates). |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
 | **1b** | Documents API + **`GET/POST /api/v1/organizations`** (dev admin). Tenant = **`X-Organization-Id`** on document routes. |
-| **1c** | **`frontend/`** Upload, **Documents**, **Anomalies**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**. |
-| **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess. |
+| **1c** | **`frontend/`** Upload, **Documents**, **Anomalies**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**; **Anomalies** §5 **review status** + **Refresh** (batch **materialize-comparisons** + list reload). |
+| **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess; after bill upsert **§3e** enqueues comparison backfill on the same ``documents`` queue. |
 | **1h** | List + detail + **`processing_error`**; latest raw extraction on detail. |
 | **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional **Tesseract OCR** for scan-only PDFs / images → optional LLM → **`generic-bill-v1`** JSONB. |
 | **2b** | Strict Pydantic for **`stub-v1`** and **`generic-bill-v1`** (**``extra=forbid``**). |
 | **2c–2d** | Normalization + transactional **`bills` / `bill_line_items`** upsert; **`GET …/bill`**. |
 | **3a** | Prior-bill queries: `app/services/comparison/period.py`, `app/repositories/bills.py` (`list_bills_for_site`, `get_prior_bills_for_bill`), **`GET …/bill/prior-bills`**. |
 | **3b** | Rule pack v1: `rule_pack_v1.py` (MoM total, new fee lines, header mismatch); **`GET …/bill/comparison`**; UI **Comparison insights**. |
-| **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`**; replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab (site filter via Connection picker). |
+| **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`** (+ **`GET …/anomalies/{id}`** §4d); replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab. New anomalies default **`review_status=open`** (**009**). |
+| **3e** | **Shipped:** RQ jobs ``run_document_comparison_backfill_job`` / ``run_site_comparison_refresh_job`` (``app/jobs/comparison_jobs.py``); ``app/services/comparison/backfill.py`` + ``comparison_queue.py``. Runs after worker bill upsert and after **PATCH …/site** (refresh prior ``site_id`` when bill moved). Bounded like **3a** (200 bills/site). *Optional later:* indexed SQL for huge sites. |
+| **4b–4d** | Template copy + confidence from ``anomalies.evidence`` — ``build_explainability_v1`` (`app/services/explain/anomaly_v1.py`); nested ``explainability`` on anomaly JSON; UI **Grounding** + **Explanation** columns. |
 | **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete** button (hidden from list). |
 | **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
 
 ### Not started (still Phase 1 product scope)
 
-- **§3c–3e:** site-to-site, comparison backfill / scale.
-- **§4–5:** explainability, review workflow.
+- **§3c:** site-to-site comparables (see **Possible future work** below).
+- **§5e:** free-text **note** on review transition (API may accept `note`; inbox UI does not expose it yet).
 - **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
 
 ### Deferred / optional (see also `product_roadmap.md`)
@@ -47,17 +49,23 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **1-OPT** | `site_id` on upload UI (API already accepts it). |
 | **2-OPT** | OCR quality hardening (DPI/thresholds, coverage tests). |
 | **2e** | Internal raw vs normalized viewer (admin). |
-| **3c** | Site-to-site comparables. |
-| **3e** | Comparison backfill / optimized prior-bill SQL at scale. |
 | **4b-OPT** | LLM polish on explanation templates. |
 | **1e–1g** | Inbound email ingestion (removed from repo; revisit if product wants it). |
 | **P1–P3** | Auth, idempotency hardening, RBAC (track parallel to §5). |
 
+### Possible future work (breadth / scale)
+
+These are **not** in the current sprint; **§3c** stays out of repo until product asks for cross-site rules.
+
+| ID | Item |
+|----|------|
+| **§3c** | Site-to-site comparables (only where categories/units align; explicit “not comparable” outcomes). |
+
 ### Suggested “resume here” order
 
-1. **§3e** — comparison backfill / optimized prior-bill SQL when late bills land (**3c** optional in parallel).  
-2. **§4** — template explainability from stored metrics + anomaly rows.  
-3. **§5** — review workflow on persisted anomalies.
+1. **§5e** — optional notes on review transitions in the UI (audit rows already persist server-side).  
+2. **§3e tuning** — indexed prior-bill SQL / higher caps when a single site exceeds ~200 bills.  
+3. **§3c** — only when pilot demand justifies cross-site comparison (see table above).
 
 ---
 
@@ -120,7 +128,7 @@ Each **product milestone** below is split into **independent engineering steps**
 | **3b — Rule pack v1 (code-first)** | MoM deltas, new fee lines, simple thresholds; deterministic outputs + evidence structs. | Table-driven rules file is fine; no LLM. |
 | **3c — Site-to-site comparables** | Only where categories/units align; explicit “not comparable” outcomes. | Can ship after **3b** if you gate on schema flags. |
 | **3d — `anomalies` persistence** | **Shipped:** `anomalies` + partial unique indexes; ``GET /api/v1/anomalies``; upsert on ``GET …/bill/comparison`` (delete+insert per ``bill_id`` + ``rule_pack_version``); fee rules expand to per-line rows with ``bill_line_item_id``. | Explainability (**4**) reads these rows + stored metrics. |
-| **3e — Re-run / backfill job** | When a new bill lands, re-evaluate open windows (e.g. last N periods). | Isolated worker task; decouples from upload path latency. |
+| **3e — Re-run / backfill job** | **Shipped:** RQ backfill after worker upsert + site PATCH (``app/services/comparison/backfill.py``); refreshes same-site *newest→anchor* chain + optional full refresh for the previous site when a bill moves. | Without Redis, user must still call ``GET …/bill/comparison`` to populate ``anomalies``. |
 
 ---
 
@@ -128,10 +136,10 @@ Each **product milestone** below is split into **independent engineering steps**
 
 | Step | What ships | Decoupling note |
 |------|------------|-----------------|
-| **4a — Metric snapshot on compare** | Persist the numbers used in rules next to each anomaly (or in JSONB evidence). | Makes explanations **grounded** without re-querying fragile joins. |
-| **4b — Copy generation from metrics** | Templates / string builders from **4a**; optional LLM “polish” behind a flag. | Ship **4b** with templates only first; LLM is optional. |
-| **4c — Confidence tiers** | Heuristics from completeness, variance, data age; stable enum for UI. | Independent module; golden-file tests. |
-| **4d — API: anomaly + explanation + confidence** | Single read model for dashboard/inbox. | Review UI (**5**) can mock this until **5** is built. |
+| **4a — Metric snapshot on compare** | **Shipped:** numbers live in ``anomalies.evidence`` from §3b/SQL (no separate snapshot table). | Grounds §4 templates without re-querying lines. |
+| **4b — Copy generation from metrics** | **Shipped:** `app/services/explain/anomaly_v1.py` templates per ``rule_id``. | LLM polish remains **4b-OPT** in deferred table. |
+| **4c — Confidence tiers** | **Shipped:** ``high`` / ``medium`` / ``low`` from evidence completeness + ``reasons[]`` for UX. | Variance/age heuristics can extend later. |
+| **4d — API: anomaly + explanation + confidence** | **Shipped:** nested ``explainability`` on list + ``GET /api/v1/anomalies/{id}``. | Powers review UI (**5**). |
 
 ---
 
@@ -139,11 +147,11 @@ Each **product milestone** below is split into **independent engineering steps**
 
 | Step | What ships | Decoupling note |
 |------|------------|-----------------|
-| **5a — State machine + transition rules** | States: e.g. `open` / `approved` / `dismissed` / `flagged`; valid transitions only. | API-first; Postman/curl before UI. |
-| **5b — Audit log** | Append-only `anomaly_review_events` (who, when, from→to, note). | RLS/tenant filters later; schema early. |
-| **5c — Anomaly inbox API** | List/filter/sort by site, period, severity, status. | Powers UI; can return mock explanations until **4d** is live. |
-| **5d — Review UI (inbox + detail)** | Table + detail drawer; action buttons call **5a**. | Depends on **5c**; can ship read-only inbox before write actions. |
-| **5e — Annotations / notes** | Free-text or structured note on transition. | Small addition after **5a**–**5d** happy path. |
+| **5a — State machine + transition rules** | **Shipped:** states `open` / `approved` / `dismissed` / `flagged`; `app/services/review/transition.py` + **`POST /api/v1/anomalies/{id}/review`**. | UI in **1c** Anomalies tab. |
+| **5b — Audit log** | **Shipped:** append-only **`anomaly_review_events`** (**009**); **`GET /api/v1/anomalies/{id}/review-events`**. | Optional UI later. |
+| **5c — Anomaly inbox API** | **Shipped:** list **`review_status`**, **`sort`**, **`order`** on **`GET /api/v1/anomalies`**. | Powers **Anomalies** filter. |
+| **5d — Review UI (inbox + detail)** | **Shipped:** inbox table **Review** + **Actions** (approve / dismiss / flag / reopen); row actions call **5a**. | Detail drawer for audit **TBD** (optional). |
+| **5e — Annotations / notes** | Free-text or structured note on transition. | **`note`** accepted on **`POST …/review`**; inbox UI **not** wired yet. |
 
 ---
 

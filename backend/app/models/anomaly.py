@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from app.models.anomaly_review_event import AnomalyReviewEvent
     from app.models.bill import Bill
     from app.models.bill_line_item import BillLineItem
     from app.models.document import Document
@@ -76,6 +77,7 @@ class Anomaly(Base):
     title: Mapped[str] = mapped_column(Text(), nullable=False)
     summary: Mapped[str] = mapped_column(Text(), nullable=False)
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -98,4 +100,10 @@ class Anomaly(Base):
     line_item: Mapped[Optional["BillLineItem"]] = relationship(
         "BillLineItem",
         foreign_keys=[bill_line_item_id],
+    )
+    review_events: Mapped[list["AnomalyReviewEvent"]] = relationship(
+        "AnomalyReviewEvent",
+        back_populates="anomaly",
+        order_by="AnomalyReviewEvent.created_at",
+        passive_deletes=True,
     )

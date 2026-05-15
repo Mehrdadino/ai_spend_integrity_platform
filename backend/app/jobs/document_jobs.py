@@ -5,6 +5,9 @@ LLM, **Pydantic-validates** (2b), inserts JSONB, then upserts normalized bills (
 Scanned PDFs with no text layer fail with a clear ``processing_error`` (OCR TBD).
 Validation failures raise ``ExtractionPayloadValidationError``; the worker maps any
 exception to ``failed`` + ``processing_error`` (no repair).
+
+After a successful bill upsert, **§3e** enqueues ``comparison_queue`` so anomalies are
+refreshed without calling ``GET …/bill/comparison`` in the browser.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_session_factory
 from app.models.document import Document
 from app.services.bill_sync import upsert_bill_for_document
+from app.services.comparison_queue import enqueue_document_comparison_backfill_safe
 from app.services.raw_extraction import persist_raw_extraction_for_document
 
 logger = logging.getLogger(__name__)
@@ -72,6 +76,8 @@ def process_document_pipeline(document_id: str) -> None:
             )
             session.commit()
             logger.info("document_jobs: id=%s -> %s", document_id, PROCESSING_EXTRACTED)
+            # §3e: persist anomalies without requiring GET /bill/comparison from the UI.
+            enqueue_document_comparison_backfill_safe(oid)
         except Exception as exc:
             session.rollback()
             doc_failed = session.get(Document, oid)
