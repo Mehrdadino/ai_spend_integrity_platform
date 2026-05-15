@@ -40,7 +40,7 @@ pip install -e .
 
 If **`venv`** or **`pip`** fails with **`pyexpat`** / **`XML_SetAllocTrackerActivationThreshold`**, use **`./scripts/bootstrap-backend-venv.sh`** instead.
 
-**`./scripts/dev.sh`** uses **`backend/.venv/bin/python`** when present; otherwise **`python3`**. Override with **`BACKEND_PYTHON=/path/to/python ./scripts/dev.sh`**.
+**`./scripts/dev.sh`** creates **`backend/.venv`** on first run (calls **`bootstrap-backend-venv.sh`**) and runs **`uv sync`** on each start when **`uv`** is on PATH (usually a no-op). Override interpreter with **`BACKEND_PYTHON=/path/to/python ./scripts/dev.sh`** (skips venv bootstrap/sync).
 
 For Alembic and one-off scripts, activate the venv first, then **`python -m alembic`** / **`python -m app.scripts...`**.
 

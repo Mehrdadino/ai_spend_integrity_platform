@@ -3,7 +3,7 @@
 # Homebrew's ``python3.12 -m venv`` fails: ``ensurepip`` / ``pyexpat`` vs ``/usr/lib/libexpat``).
 #
 # Uses ``uv`` (https://github.com/astral-sh/uv) to download a standalone CPython build,
-# then ``uv pip install -e .`` for this package.
+# then ``uv sync`` (``backend/uv.lock``) to install project dependencies into ``.venv``.
 #
 # Run from repo root:
 #   ./scripts/bootstrap-backend-venv.sh
@@ -32,8 +32,8 @@ rm -rf .venv
 echo "==> uv venv --python 3.12"
 uv venv --python 3.12 .venv
 
-echo "==> uv pip install -e ."
-uv pip install -e . --python .venv/bin/python
+echo "==> uv sync (install locked deps from pyproject.toml / uv.lock)"
+uv sync
 
 echo ""
 echo "==> Success:"

@@ -1,8 +1,8 @@
 """Persist raw extraction JSON for a document (2a) then ``bill_sync`` consumes it (2d).
 
-Pipeline: load bytes from S3 → **embedded PDF text** (``pypdf``) → optional **LLM**
-structuring → strict Pydantic (**2b**) → JSONB insert. Scanned PDFs with no text
-layer set ``needs_ocr`` and fail until OCR is implemented.
+Pipeline: load bytes from S3 → **embedded PDF text** (``pypdf``) → optional
+**Tesseract OCR** if embedded text is too sparse → optional **LLM**
+structuring → strict Pydantic (**2b**) → JSONB insert.
 
 When ``Settings.extraction_llm_api_key`` is empty, a **deterministic** sample payload
 is still used for dev/CI (see ``structured_via`` in returned provenance).
@@ -79,19 +79,13 @@ def persist_raw_extraction_for_document(
 
     provenance = _provenance_base(text_result)
 
-    if text_result is not None and text_result.needs_ocr:
-        raise DocumentTextExtractionError(
-            "Document has little or no embedded text (likely a scan or image). "
-            "OCR is not enabled yet; upload a digital PDF with selectable text or wait for OCR support.",
-        )
-
     bill_text = text_result.text if text_result and text_result.has_usable_text else None
     candidate: dict[str, Any]
     model_id: str
     has_llm_key = bool((settings.extraction_llm_api_key or "").strip())
 
     if has_llm_key:
-        llm_out = safe_llm_generic_bill_dict(
+        llm_out, llm_error = safe_llm_generic_bill_dict(
             document=document,
             settings=settings,
             document_text=bill_text,
@@ -104,6 +98,12 @@ def persist_raw_extraction_for_document(
             candidate = build_deterministic_generic_bill_dict(document)
             model_id = settings.raw_extraction_stub_model_id
             provenance["structured_via"] = "deterministic_fallback"
+            if llm_error:
+                provenance["structured_error"] = llm_error
+            provenance["structured_note"] = (
+                "Line items below are a dev sample because LLM structuring failed. "
+                "Fix EXTRACTION_LLM_* settings and reprocess."
+            )
     else:
         if bill_text:
             provenance["structured_via"] = "deterministic_stub"

@@ -13,6 +13,9 @@ dependencies = [
     "redis>=5.0.0",
     "rq>=2.0.0",
     "pypdf>=5.0.0",
+    "pytesseract>=0.3.10",
+    "pdf2image>=1.17.0",
+    "Pillow>=10.0.0",
     "sqlalchemy>=2.0.36",
     "uvicorn[standard]>=0.32.0",
 ]

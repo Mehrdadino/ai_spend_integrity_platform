@@ -4,8 +4,9 @@
 stored as characters when the PDF was generated (typical e-bills, exports from
 billing portals). This is **not** OCR.
 
-**OCR (paid / heavier):** scanned pages are images; ``pypdf`` returns little or no
-text. ``needs_ocr`` flags that case so we fail clearly until an OCR provider is wired.
+**OCR (local / free for v1):** scanned pages are images; ``pypdf`` returns little or no
+text. If embedded text is too sparse, we fall back to **Tesseract OCR** for PDFs
+and image MIME types.
 
 Tenancy: callers pass an org-scoped ``Document`` row; bytes are loaded from that row's
 ``bucket`` / ``object_key`` only.
@@ -150,6 +151,126 @@ def extract_text_from_pdf_bytes(
     )
 
 
+def _ocr_tesseract_from_image_bytes(
+    body: bytes,
+    *,
+    mime_type: str,
+    settings: Settings,
+) -> DocumentTextResult:
+    """Run local Tesseract OCR over an image-like document (JPEG/PNG/etc.)."""
+    if not body:
+        raise DocumentTextExtractionError("Image object is empty")
+
+    try:
+        from PIL import Image  # type: ignore[import-not-found]
+    except Exception as exc:
+        raise DocumentTextExtractionError(
+            f"OCR not available: Pillow import failed: {exc}",
+        ) from exc
+
+    try:
+        import pytesseract  # type: ignore[import-not-found]
+    except Exception as exc:
+        raise DocumentTextExtractionError(
+            f"OCR not available: pytesseract import failed: {exc}",
+        ) from exc
+
+    try:
+        img = Image.open(BytesIO(body))
+        img = img.convert("RGB")
+        text = pytesseract.image_to_string(img, lang=settings.ocr_tesseract_lang)
+    except Exception as exc:
+        raise DocumentTextExtractionError(f"Tesseract OCR failed: {exc}") from exc
+
+    text = _collapse_whitespace(text or "")
+    char_count = len(text)
+    has_usable_text = char_count >= settings.extraction_text_min_chars_total
+    if not has_usable_text:
+        raise DocumentTextExtractionError(
+            "OCR ran but produced no usable text (check scan quality or OCR language).",
+        )
+
+    return DocumentTextResult(
+        method="tesseract_ocr_image",
+        text=text,
+        page_count=1,
+        char_count=char_count,
+        chars_per_page=float(char_count),
+        has_usable_text=True,
+        needs_ocr=False,
+        mime_type=mime_type,
+    )
+
+
+def _ocr_tesseract_from_pdf_bytes(
+    body: bytes,
+    *,
+    mime_type: str,
+    settings: Settings,
+) -> DocumentTextResult:
+    """Run local Tesseract OCR over rendered PDF pages."""
+    if not body:
+        raise DocumentTextExtractionError("PDF object is empty")
+    max_pages = max(1, int(settings.ocr_max_pages))
+
+    try:
+        from pdf2image import convert_from_bytes  # type: ignore[import-not-found]
+    except Exception as exc:
+        raise DocumentTextExtractionError(
+            f"OCR not available: pdf2image import failed: {exc}. "
+            "Ensure poppler (pdftoppm) is installed on your system for rendering.",
+        ) from exc
+
+    try:
+        import pytesseract  # type: ignore[import-not-found]
+    except Exception as exc:
+        raise DocumentTextExtractionError(
+            f"OCR not available: pytesseract import failed: {exc}",
+        ) from exc
+
+    try:
+        pages = convert_from_bytes(
+            body,
+            dpi=int(settings.ocr_dpi),
+            first_page=1,
+            last_page=max_pages,
+        )
+    except Exception as exc:
+        raise DocumentTextExtractionError(
+            f"PDF render for OCR failed: {exc}. Ensure poppler (pdftoppm) is installed.",
+        ) from exc
+
+    text_parts: list[str] = []
+    for img in pages:
+        try:
+            chunk = pytesseract.image_to_string(img, lang=settings.ocr_tesseract_lang)
+        except Exception as exc:
+            logger.warning("document_text: ocr page failed: %s", exc)
+            chunk = ""
+        if chunk and chunk.strip():
+            text_parts.append(chunk)
+
+    text = _collapse_whitespace("\n\n".join(text_parts))
+    char_count = len(text)
+    has_usable_text = char_count >= settings.extraction_text_min_chars_total
+    if not has_usable_text:
+        raise DocumentTextExtractionError(
+            "OCR ran but produced no usable text (check scan quality or OCR language).",
+        )
+
+    page_count = len(pages)
+    return DocumentTextResult(
+        method="tesseract_ocr_pdf",
+        text=text,
+        page_count=page_count,
+        char_count=char_count,
+        chars_per_page=char_count / max(page_count, 1),
+        has_usable_text=True,
+        needs_ocr=False,
+        mime_type=mime_type,
+    )
+
+
 def extract_text_for_document(
     document: Document,
     *,
@@ -157,23 +278,15 @@ def extract_text_for_document(
 ) -> DocumentTextResult | None:
     """Load object bytes from S3 and extract text when MIME is PDF; ``None`` if skipped MIME.
 
-    Raises ``DocumentTextExtractionError`` on corrupt PDF or empty object. Image MIME types
-    return a zero-text result with ``needs_ocr=True`` (no OCR call yet).
+    Raises ``DocumentTextExtractionError`` on corrupt PDF/invalid image/empty document
+    or when OCR runs but produces no usable text.
     """
     settings = settings or get_settings()
     mime = (document.mime_type or "").strip().lower()
 
     if mime.startswith(_IMAGE_MIME_PREFIX):
-        return DocumentTextResult(
-            method="skipped_image_needs_ocr",
-            text="",
-            page_count=1,
-            char_count=0,
-            chars_per_page=0.0,
-            has_usable_text=False,
-            needs_ocr=True,
-            mime_type=mime,
-        )
+        body = get_document_object_bytes(bucket=document.bucket, key=document.object_key)
+        return _ocr_tesseract_from_image_bytes(body, mime_type=mime, settings=settings)
 
     if not mime.startswith(_PDF_MIME_PREFIX):
         logger.info(
@@ -184,12 +297,19 @@ def extract_text_for_document(
         return None
 
     body = get_document_object_bytes(bucket=document.bucket, key=document.object_key)
-    return extract_text_from_pdf_bytes(
+    result = extract_text_from_pdf_bytes(
         body,
         mime_type=mime,
         min_chars_total=settings.extraction_text_min_chars_total,
         min_chars_per_page=settings.extraction_text_min_chars_per_page,
     )
+    if result.needs_ocr and settings.ocr_provider == "tesseract":
+        return _ocr_tesseract_from_pdf_bytes(
+            body,
+            mime_type=mime,
+            settings=settings,
+        )
+    return result
 
 
 def truncate_text_for_llm(text: str, *, max_chars: int | None = None) -> str:

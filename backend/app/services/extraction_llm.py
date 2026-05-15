@@ -32,6 +32,25 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _http_error_detail(status_code: int, body: str) -> str:
+    """Pull provider message from OpenAI/Gemini error JSON when present."""
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        snippet = body.strip()[:240]
+        return f"LLM HTTP {status_code}" + (f": {snippet}" if snippet else "")
+
+    err = data.get("error")
+    if isinstance(err, dict):
+        msg = err.get("message")
+        if isinstance(msg, str) and msg.strip():
+            return f"LLM HTTP {status_code}: {msg.strip()}"
+    msg = data.get("message")
+    if isinstance(msg, str) and msg.strip():
+        return f"LLM HTTP {status_code}: {msg.strip()}"
+    return f"LLM HTTP {status_code}"
+
+
 def _strip_json_fences(text: str) -> str:
     """Remove ```json ... ``` wrappers some models emit."""
     t = text.strip()
@@ -108,7 +127,7 @@ def llm_generic_bill_dict(
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")[:2000]
         logger.warning("extraction_llm: HTTP %s %s", e.code, err_body)
-        raise RuntimeError(f"LLM HTTP {e.code}") from e
+        raise RuntimeError(_http_error_detail(e.code, err_body)) from e
     except Exception as exc:
         logger.warning("extraction_llm: request failed: %s", exc)
         raise
@@ -129,19 +148,32 @@ def llm_generic_bill_dict(
     return data
 
 
+def format_llm_error_for_ui(exc: BaseException, *, max_len: int = 500) -> str:
+    """Short, user-visible message for ``bills.summary.structured_error``."""
+    msg = str(exc).strip() or type(exc).__name__
+    prefix = "LLM structuring failed: "
+    budget = max(0, max_len - len(prefix))
+    if len(msg) > budget:
+        msg = msg[: budget - 3] + "..."
+    return prefix + msg
+
+
 def safe_llm_generic_bill_dict(
     *,
     document: Document,
     settings: Settings,
     document_text: str | None = None,
-) -> dict[str, Any] | None:
-    """Return LLM dict or ``None`` on any failure (caller supplies fallback)."""
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(payload, None)`` on success or ``(None, error_message)`` for bill summary UI."""
     try:
-        return llm_generic_bill_dict(
-            document=document,
-            settings=settings,
-            document_text=document_text,
+        return (
+            llm_generic_bill_dict(
+                document=document,
+                settings=settings,
+                document_text=document_text,
+            ),
+            None,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("extraction_llm: failed for document_id=%s", document.id)
-        return None
+        return None, format_llm_error_for_ui(exc)

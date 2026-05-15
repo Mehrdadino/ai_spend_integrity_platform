@@ -24,21 +24,21 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **1c** | **`frontend/`** Upload, **Documents**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**. |
 | **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess. |
 | **1h** | List + detail + **`processing_error`**; latest raw extraction on detail. |
-| **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional LLM → **`generic-bill-v1`** JSONB; scan-only PDFs fail (OCR TBD). |
+| **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional **Tesseract OCR** for scan-only PDFs / images → optional LLM → **`generic-bill-v1`** JSONB. |
 | **2b** | Strict Pydantic for **`stub-v1`** and **`generic-bill-v1`** (**``extra=forbid``**). |
 | **2c–2d** | Normalization + transactional **`bills` / `bill_line_items`** upsert; **`GET …/bill`**. |
 | **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
 
 ### Not started (still Phase 1 product scope)
 
-- **OCR** for image / scan-only PDFs (`document_text.needs_ocr`).  
-- **§3–5:** comparison, explainability, review.  
+- **OCR quality hardening** — tune OCR thresholds/rendering and increase scan coverage tests.
+- **§3–5:** comparison, explainability, review.
 - **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
 
 ### Suggested “resume here” order
 
 1. **§3** — comparison rules once two+ structured bills exist per site (enable **`EXTRACTION_LLM_API_KEY`** for real line items).  
-2. **OCR** — optional provider when `text_needs_ocr`.
+2. **OCR quality hardening** — tune thresholds / OCR rendering & add OCR coverage tests when needed.
 
 ---
 

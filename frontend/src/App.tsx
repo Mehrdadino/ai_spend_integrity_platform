@@ -1,5 +1,7 @@
 /**
- * Phase 1 ingestion UI: presigned upload (1c) + document list with **processing_error**
+ * Phase 1 ingestion UI: presigned upload (1c) + document list with **processing_error**.
+ * Document viewer keeps prior preview/bill visible during reprocess polling (stale-while-revalidate)
+ * with a single pipeline spinner overlay instead of clearing sections.
  * and status (1h), plus a **document viewer** (preview + metadata) from list click,
  * upload result, or deep link ``?doc=<uuid>`` (requires ``X-Organization-Id``).
  * **Organizations** tab lists/creates tenants (no org header). **Reprocess** re-queues the worker.
@@ -8,7 +10,7 @@
  * Upload stays disabled until **Organization ID** is filled (``X-Organization-Id``).
  * Prefill via ``VITE_ORG_ID`` in ``frontend/.env``.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createOrganization,
   fetchOrganizationsList,
@@ -35,6 +37,20 @@ const defaultApiBase = "http://127.0.0.1:8000";
 
 /** Interval (ms) for refetching viewer + bill while ``queued`` / ``pending`` / ``received``. */
 const PIPELINE_POLL_MS = 2500;
+
+/** Worker statuses where the viewer should show the pipeline overlay and poll. */
+const PIPELINE_BUSY_STATUSES = new Set(["queued", "pending", "received"]);
+
+function PipelineBusyOverlay({ label }: { label: string }) {
+  return (
+    <div className="pipeline-overlay" aria-busy="true" aria-live="polite">
+      <div className="pipeline-overlay-inner">
+        <span className="pipeline-spinner" aria-hidden />
+        <span className="pipeline-overlay-label">{label}</span>
+      </div>
+    </div>
+  );
+}
 
 /** Dice-friendly random strings for the org form (slug must stay URL-safe: letters, digits, hyphens). */
 function randomToken(len = 10): string {
@@ -115,7 +131,8 @@ function DocumentViewerPanel({
   onReprocess,
   reprocessBusy,
   reprocessError,
-  pipelinePolling,
+  pipelineBusy,
+  pipelineBusyLabel,
 }: {
   headerDocumentId: string | null;
   viewer: DocumentViewerResponse | null;
@@ -129,8 +146,9 @@ function DocumentViewerPanel({
   onReprocess?: () => void;
   reprocessBusy?: boolean;
   reprocessError?: string | null;
-  /** True while status is ``queued`` / ``pending`` / ``received`` — parent polls API in the background. */
-  pipelinePolling?: boolean;
+  /** Show spinner overlay (reprocess / worker / background refresh) without clearing prior content. */
+  pipelineBusy?: boolean;
+  pipelineBusyLabel?: string;
 }) {
   const showPanel =
     loading ||
@@ -150,8 +168,13 @@ function DocumentViewerPanel({
   if (!showPanel) {
     return null;
   }
+  const statusPolling = viewer != null && PIPELINE_BUSY_STATUSES.has(viewer.processing_status);
   return (
-    <section className="card doc-viewer-card" aria-live="polite">
+    <section className="card doc-viewer-card doc-viewer-card--pipeline" aria-live="polite">
+      {pipelineBusy ? (
+        <PipelineBusyOverlay label={pipelineBusyLabel ?? "Processing document…"} />
+      ) : null}
+      <div className={`doc-viewer-body${pipelineBusy ? " doc-viewer-body--dimmed" : ""}`}>
       <div className="doc-viewer-toolbar">
         <h2 className="doc-viewer-title-wrap">
           Document
@@ -162,8 +185,6 @@ function DocumentViewerPanel({
           ) : null}
         </h2>
         <div className="doc-viewer-toolbar-actions">
-          {loading ? <span className="hint">Loading preview…</span> : null}
-          {billLoading ? <span className="hint">Loading bill…</span> : null}
           {onReprocess ? (
             <button
               type="button"
@@ -182,7 +203,13 @@ function DocumentViewerPanel({
       </div>
       {reprocessError ? <p className="error">{reprocessError}</p> : null}
       {error ? <p className="error">{error}</p> : null}
-      {viewer && !loading ? (
+      {loading && !viewer ? (
+        <div className="doc-preview-shell doc-preview-shell--loading">
+          <span className="pipeline-spinner pipeline-spinner--inline" aria-hidden />
+          <span className="hint">Loading preview…</span>
+        </div>
+      ) : null}
+      {viewer ? (
         <>
           <div className="doc-preview-shell">
             <DocumentPreview viewer={viewer} />
@@ -203,7 +230,7 @@ function DocumentViewerPanel({
             <dt>Status</dt>
             <dd>
               <span className={statusPillClass(viewer.processing_status)}>{viewer.processing_status}</span>
-              {pipelinePolling ? (
+              {statusPolling ? (
                 <span className="hint doc-status-poll-hint"> · auto-refresh until worker finishes</span>
               ) : null}
             </dd>
@@ -247,7 +274,7 @@ function DocumentViewerPanel({
               automatically.
             </p>
           ) : null}
-          {!billLoading && bill ? (
+          {bill ? (
             <>
               <dl className="kv bill-header-kv">
                 <dt>Bill ID</dt>
@@ -286,6 +313,18 @@ function DocumentViewerPanel({
                   </>
                 ) : null}
               </dl>
+              {bill.summary?.structured_error ? (
+                <p className="error bill-structured-error" role="alert">
+                  {String(bill.summary.structured_error)}
+                </p>
+              ) : null}
+              {bill.summary?.structured_via === "deterministic_fallback" &&
+              !bill.summary?.structured_error ? (
+                <p className="error bill-structured-error" role="alert">
+                  LLM structuring failed (no error detail returned). Line items may be the dev sample — check
+                  worker logs and EXTRACTION_LLM_* settings, then reprocess.
+                </p>
+              ) : null}
               {bill.summary?.structured_note ? (
                 <p className="hint bill-structured-note">{String(bill.summary.structured_note)}</p>
               ) : null}
@@ -328,6 +367,7 @@ function DocumentViewerPanel({
           ) : null}
         </div>
       ) : null}
+      </div>
     </section>
   );
 }
@@ -361,6 +401,10 @@ export function App() {
   const [viewerReloadNonce, setViewerReloadNonce] = useState(0);
   const [reprocessBusy, setReprocessBusy] = useState(false);
   const [reprocessError, setReprocessError] = useState<string | null>(null);
+  /** Keep spinner visible from reprocess click until worker finishes and bill refetch settles. */
+  const [pipelineHold, setPipelineHold] = useState(false);
+  const loadedViewerDocIdRef = useRef<string | null>(null);
+  const loadedBillDocIdRef = useRef<string | null>(null);
 
   const [orgFormName, setOrgFormName] = useState("");
   const [orgFormSlug, setOrgFormSlug] = useState("");
@@ -399,6 +443,9 @@ export function App() {
     setBillError(null);
     setBillLoading(false);
     setReprocessError(null);
+    setPipelineHold(false);
+    loadedViewerDocIdRef.current = null;
+    loadedBillDocIdRef.current = null;
   }, []);
 
   /** Deep link: open Documents tab and select ``?doc=`` once on first mount. */
@@ -421,13 +468,17 @@ export function App() {
     }
     let cancelled = false;
     setReprocessError(null);
-    setViewerLoading(true);
+    const initialLoad = loadedViewerDocIdRef.current !== selectedDocId;
+    if (initialLoad) {
+      setDocumentViewer(null);
+      setViewerLoading(true);
+    }
     setViewerError(null);
-    setDocumentViewer(null);
     void fetchDocumentViewer(apiBase.trim(), orgId.trim(), selectedDocId)
       .then((v) => {
         if (!cancelled) {
           setDocumentViewer(v);
+          loadedViewerDocIdRef.current = selectedDocId;
         }
       })
       .catch((e) => {
@@ -454,13 +505,17 @@ export function App() {
       return;
     }
     let cancelled = false;
-    setBillLoading(true);
+    const initialLoad = loadedBillDocIdRef.current !== selectedDocId;
+    if (initialLoad) {
+      setDocumentBill(null);
+      setBillLoading(true);
+    }
     setBillError(null);
-    setDocumentBill(null);
     void fetchDocumentBill(apiBase.trim(), orgId.trim(), selectedDocId)
       .then((res) => {
         if (!cancelled) {
           setDocumentBill(res.bill);
+          loadedBillDocIdRef.current = selectedDocId;
         }
       })
       .catch((e) => {
@@ -477,6 +532,18 @@ export function App() {
       cancelled = true;
     };
   }, [selectedDocId, orgId, apiBase, viewerReloadNonce]);
+
+  /** Clear pipeline overlay once extraction finished and fetches are idle. */
+  useEffect(() => {
+    if (!pipelineHold) {
+      return;
+    }
+    const st = documentViewer?.processing_status;
+    const terminal = st === "extracted" || st === "failed";
+    if (terminal && !viewerLoading && !billLoading) {
+      setPipelineHold(false);
+    }
+  }, [pipelineHold, documentViewer?.processing_status, viewerLoading, billLoading]);
 
   const runUpload = useCallback(async () => {
     if (!file || !orgId.trim()) {
@@ -626,6 +693,7 @@ export function App() {
     }
     setReprocessBusy(true);
     setReprocessError(null);
+    setPipelineHold(true);
     try {
       await reprocessDocument(apiBase.trim(), orgId.trim(), selectedDocId);
       setViewerReloadNonce((n) => n + 1);
@@ -651,11 +719,22 @@ export function App() {
       reprocessBusy ||
       !!reprocessError);
 
-  const pipelinePolling =
+  const pipelineStatusBusy =
     !!documentViewer &&
-    (documentViewer.processing_status === "queued" ||
-      documentViewer.processing_status === "pending" ||
-      documentViewer.processing_status === "received");
+    PIPELINE_BUSY_STATUSES.has(documentViewer.processing_status);
+
+  const pipelineBusy =
+    reprocessBusy ||
+    pipelineHold ||
+    pipelineStatusBusy ||
+    (viewerLoading && !documentViewer) ||
+    (billLoading && !documentBill);
+
+  const pipelineBusyLabel = reprocessBusy
+    ? "Starting reprocess…"
+    : pipelineStatusBusy
+      ? "Document is being processed…"
+      : "Updating bill…";
 
   return (
     <div className={`${pageClass}${pageWideWithViewer ? " page--viewer" : ""}`}>
@@ -804,12 +883,13 @@ export function App() {
                 onReprocess={() => void handleReprocessSelected()}
                 reprocessBusy={reprocessBusy}
                 reprocessError={reprocessError}
-                pipelinePolling={
-                  pipelinePolling &&
+                pipelineBusy={
+                  pipelineBusy &&
                   !!documentViewer &&
                   documentViewer.document_id === result.document_id &&
                   selectedDocId === result.document_id
                 }
+                pipelineBusyLabel={pipelineBusyLabel}
               />
             </section>
           ) : null}
@@ -889,7 +969,8 @@ export function App() {
             onReprocess={() => void handleReprocessSelected()}
             reprocessBusy={reprocessBusy}
             reprocessError={reprocessError}
-            pipelinePolling={pipelinePolling}
+            pipelineBusy={pipelineBusy}
+            pipelineBusyLabel={pipelineBusyLabel}
           />
         </div>
       )}

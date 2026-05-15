@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     extraction_text_min_chars_per_page: int = 25
     extraction_llm_max_document_chars: int = 24_000
 
+    # OCR (Phase 1): local/free Tesseract for scan-only PDFs / image bills.
+    # This uses embedded PDFs first; OCR is only attempted when embedded text
+    # is too sparse.
+    ocr_provider: str = "tesseract"
+    ocr_tesseract_lang: str = "eng"
+    ocr_dpi: int = 300
+    ocr_max_pages: int = 10
+
 
 @lru_cache
 def get_settings() -> Settings:

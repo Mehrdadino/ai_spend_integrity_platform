@@ -55,6 +55,76 @@ body {
   margin-top: 1.25rem;
 }
 
+.doc-viewer-card--pipeline {
+  position: relative;
+}
+
+.doc-viewer-body--dimmed {
+  opacity: 0.45;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pipeline-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  background: rgba(15, 20, 25, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.pipeline-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  text-align: center;
+}
+
+.pipeline-overlay-label {
+  font-size: 0.9rem;
+  color: var(--text);
+  max-width: 16rem;
+}
+
+.pipeline-spinner {
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: pipeline-spin 0.85s linear infinite;
+}
+
+.pipeline-spinner--inline {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-width: 2px;
+}
+
+@keyframes pipeline-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.doc-preview-shell--loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  min-height: 12rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
 .doc-viewer-toolbar {
   display: flex;
   flex-wrap: wrap;

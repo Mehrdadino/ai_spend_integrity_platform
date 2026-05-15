@@ -2,13 +2,34 @@
 # Start local dependencies (Postgres, MinIO, Redis) plus API, RQ worker, and Vite in one terminal.
 # Usage from repo root:  ./scripts/dev.sh   or   bash scripts/dev.sh
 #
-# Prerequisites: Docker running; backend/.venv from ./scripts/bootstrap-backend-venv.sh (recommended) or pip install -e .;
+# Prerequisites: Docker running; ``uv`` on PATH (see bootstrap script). This script creates
+# ``backend/.venv`` on first run and runs ``uv sync`` when deps change — no manual pip needed.
 # frontend deps (cd frontend && npm install). Stop everything with Ctrl+C.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# Backend venv: one-time create via bootstrap; ``uv sync`` on each dev start (fast no-op when up to date).
+ensure_backend_venv() {
+  if [[ -n "${BACKEND_PYTHON:-}" ]]; then
+    return 0
+  fi
+  if [[ ! -x "${ROOT}/backend/.venv/bin/python" ]]; then
+    echo "==> backend/.venv missing — running ./scripts/bootstrap-backend-venv.sh"
+    "${ROOT}/scripts/bootstrap-backend-venv.sh"
+    return 0
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    echo "==> backend Python deps (uv sync; skips work when already current)"
+    (cd "${ROOT}/backend" && uv sync)
+  else
+    echo "WARNING: uv not on PATH — using existing backend/.venv as-is."
+    echo "         After git pull, run: cd backend && uv sync   (or install uv and re-run dev.sh)"
+  fi
+}
+ensure_backend_venv
 
 # Prefer ``backend/.venv`` over ``/usr/bin/python3`` (macOS is often 3.9.x). Override with BACKEND_PYTHON=/path/to/python.
 if [[ -n "${BACKEND_PYTHON:-}" ]]; then

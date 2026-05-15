@@ -28,18 +28,18 @@ Just:
 
 - **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO**, **Redis + RQ**, **Vite + React + TypeScript** UI. Docker Compose runs Postgres, MinIO, and Redis locally.
 - **Document ingestion:** presigned upload + CLI; **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs.
-- **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**). Scanned PDFs with no text layer **fail** with a clear error (OCR not yet implemented).
+- **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), falls back to **Tesseract OCR** for scan-only PDFs / image MIME types, optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**).
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
 - **Auth:** development-style **organization UUID header** only.
 
 ### Still to build for Phase 1 MVP
 
-**Historical comparison** (§3), **explainability** (§4), **review workflow** (§5), production auth, and **OCR** for scan-only uploads — plus the full “upload → anomaly insight” loop on **real** structured bills across periods.
+**Historical comparison** (§3), **explainability** (§4), **review workflow** (§5), and production auth — plus the full “upload → anomaly insight” loop on **real** structured bills across periods.
 
 ### Recommended next focus (product ↔ eng)
 
 - **§3 comparison** once you have two+ real bills per site (requires **`EXTRACTION_LLM_API_KEY`** or future rules parser for structuring).
-- **OCR path** for `text_needs_ocr` documents (images / scanned PDFs).
+- **OCR quality hardening** — tune OCR thresholds/rendering and increase scan coverage.
 
 ---
 

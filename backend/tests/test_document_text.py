@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from app.services.document_text import (
     DocumentTextExtractionError,
+    DocumentTextResult,
     _classify_pdf_text,
     extract_text_for_document,
     extract_text_from_pdf_bytes,
@@ -68,14 +69,86 @@ class TestExtractTextForDocument(unittest.TestCase):
         doc.object_key = "k"
         self.assertIsNone(extract_text_for_document(doc))
 
-    def test_image_returns_needs_ocr_without_s3(self) -> None:
+    def test_image_ocr_path_calls_ocr_and_returns_text(self) -> None:
         doc = MagicMock()
         doc.mime_type = "image/jpeg"
-        result = extract_text_for_document(doc)
+        doc.bucket = "b"
+        doc.object_key = "k"
+
+        with (
+            patch(
+                "app.services.document_text.get_document_object_bytes",
+                return_value=b"fake-img-bytes",
+            ),
+            patch(
+                "app.services.document_text._ocr_tesseract_from_image_bytes",
+                return_value=DocumentTextResult(
+                    method="tesseract_ocr_image",
+                    text="hello",
+                    page_count=1,
+                    char_count=5,
+                    chars_per_page=5.0,
+                    has_usable_text=True,
+                    needs_ocr=False,
+                    mime_type="image/jpeg",
+                ),
+            ),
+        ):
+            result = extract_text_for_document(doc)
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertTrue(result.needs_ocr)
-        self.assertEqual(result.method, "skipped_image_needs_ocr")
+        self.assertFalse(result.needs_ocr)
+        self.assertEqual(result.method, "tesseract_ocr_image")
+
+    def test_pdf_ocr_path_when_needs_ocr(self) -> None:
+        doc = MagicMock()
+        doc.mime_type = "application/pdf"
+        doc.bucket = "b"
+        doc.object_key = "k"
+        doc.id = "00000000-0000-0000-0000-000000000099"
+
+        embedded_result = DocumentTextResult(
+            method="pypdf_embedded",
+            text="",
+            page_count=2,
+            char_count=0,
+            chars_per_page=0.0,
+            has_usable_text=False,
+            needs_ocr=True,
+            mime_type="application/pdf",
+        )
+
+        ocr_result = DocumentTextResult(
+            method="tesseract_ocr_pdf",
+            text="bill line 1",
+            page_count=2,
+            char_count=12,
+            chars_per_page=6.0,
+            has_usable_text=True,
+            needs_ocr=False,
+            mime_type="application/pdf",
+        )
+
+        with (
+            patch(
+                "app.services.document_text.get_document_object_bytes",
+                return_value=b"fake-pdf-bytes",
+            ),
+            patch(
+                "app.services.document_text.extract_text_from_pdf_bytes",
+                return_value=embedded_result,
+            ),
+            patch(
+                "app.services.document_text._ocr_tesseract_from_pdf_bytes",
+                return_value=ocr_result,
+            ),
+        ):
+            result = extract_text_for_document(doc)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.method, "tesseract_ocr_pdf")
+        self.assertFalse(result.needs_ocr)
 
 
 class TestTruncateTextForLlm(unittest.TestCase):
