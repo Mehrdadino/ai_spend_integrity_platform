@@ -14,6 +14,7 @@ from app.models.anomaly import Anomaly
 from app.models.organization import Organization
 from app.repositories.anomalies import (
     get_anomaly_for_organization,
+    latest_review_notes_for_anomaly_ids,
     list_anomalies_for_organization,
     list_review_events_for_anomaly,
 )
@@ -26,6 +27,7 @@ from app.schemas.anomalies import (
 )
 from app.services.explain import build_explainability_v1
 from app.services.review import ReviewTransitionError, apply_review_transition
+from app.services.comparison.limits import DEFAULT_SITE_BILL_SCAN
 from app.services.comparison.materialize import materialize_comparisons_for_organization
 
 router = APIRouter(prefix="/anomalies", tags=["anomalies"])
@@ -57,7 +59,12 @@ def list_anomalies(
         order=order,
         limit=limit,
     )
-    return [_to_response(row) for row in rows]
+    notes = latest_review_notes_for_anomaly_ids(
+        db,
+        organization_id=org.id,
+        anomaly_ids=[row.id for row in rows],
+    )
+    return [_to_response(row, latest_review_note=notes.get(row.id)) for row in rows]
 
 
 @router.post("/materialize-comparisons", response_model=MaterializeComparisonsResponse)
@@ -68,7 +75,12 @@ def post_materialize_comparisons(
         None,
         description="Optional ``sites.id`` scope (match Anomalies list filter / Connection picker).",
     ),
-    limit: int = Query(200, ge=1, le=500, description="Max documents to run comparison on."),
+    limit: int = Query(
+        DEFAULT_SITE_BILL_SCAN,
+        ge=1,
+        le=500,
+        description="Max documents to run comparison on.",
+    ),
 ) -> MaterializeComparisonsResponse:
     """Run §3b comparison for every extracted document with a bill (inbox **Refresh** path).
 
@@ -109,7 +121,12 @@ def post_anomaly_review(
     except ReviewTransitionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.refresh(row)
-    return _to_response(row)
+    notes = latest_review_notes_for_anomaly_ids(
+        db,
+        organization_id=org.id,
+        anomaly_ids=[row.id],
+    )
+    return _to_response(row, latest_review_note=notes.get(row.id))
 
 
 @router.get("/{anomaly_id}/review-events", response_model=list[AnomalyReviewEventResponse])
@@ -151,10 +168,15 @@ def get_anomaly(
     row = get_anomaly_for_organization(db, organization_id=org.id, anomaly_id=anomaly_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Anomaly not found")
-    return _to_response(row)
+    notes = latest_review_notes_for_anomaly_ids(
+        db,
+        organization_id=org.id,
+        anomaly_ids=[row.id],
+    )
+    return _to_response(row, latest_review_note=notes.get(row.id))
 
 
-def _to_response(row: Anomaly) -> AnomalyResponse:
+def _to_response(row: Anomaly, *, latest_review_note: str | None = None) -> AnomalyResponse:
     """Map ORM row + template explainability to HTTP model."""
     site_name = row.site.name if row.site is not None else None
     ev = dict(row.evidence) if row.evidence is not None else {}
@@ -190,6 +212,7 @@ def _to_response(row: Anomaly) -> AnomalyResponse:
             version=ex.version,
         ),
         review_status=rs,  # type: ignore[arg-type]
+        latest_review_note=latest_review_note,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

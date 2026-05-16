@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-16 (``POST /anomalies/materialize-comparisons`` + inbox Refresh)  
+**Last updated:** 2026-05-16 (§5e review notes UI + §3e prior-bill index / SQL priors)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -21,7 +21,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **Backend (`backend/`)** | FastAPI; Alembic **`008_anomalies`** + **`009_anomaly_review`** (`anomalies.review_status`, **`anomaly_review_events`**); ORM + **`app/services/review/`** (transitions); **`app/services/explain/`** (§4 templates). |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
 | **1b** | Documents API + **`GET/POST /api/v1/organizations`** (dev admin). Tenant = **`X-Organization-Id`** on document routes. |
-| **1c** | **`frontend/`** Upload, **Documents**, **Anomalies**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**; **Anomalies** §5 **review status** + **Refresh** (batch **materialize-comparisons** + list reload). |
+| **1c** | **`frontend/`** Upload, **Documents**, **Anomalies**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**; **Anomalies** §5 **review status** + **Refresh** (batch **materialize-comparisons** + list reload); §5e **note modal** + **History** (audit events). |
 | **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess; after bill upsert **§3e** enqueues comparison backfill on the same ``documents`` queue. |
 | **1h** | List + detail + **`processing_error`**; latest raw extraction on detail. |
 | **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional **Tesseract OCR** for scan-only PDFs / images → optional LLM → **`generic-bill-v1`** JSONB. |
@@ -30,7 +30,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **3a** | Prior-bill queries: `app/services/comparison/period.py`, `app/repositories/bills.py` (`list_bills_for_site`, `get_prior_bills_for_bill`), **`GET …/bill/prior-bills`**. |
 | **3b** | Rule pack v1: `rule_pack_v1.py` (MoM total, new fee lines, header mismatch); **`GET …/bill/comparison`**; UI **Comparison insights**. |
 | **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`** (+ **`GET …/anomalies/{id}`** §4d); replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab. New anomalies default **`review_status=open`** (**009**). |
-| **3e** | **Shipped:** RQ jobs ``run_document_comparison_backfill_job`` / ``run_site_comparison_refresh_job`` (``app/jobs/comparison_jobs.py``); ``app/services/comparison/backfill.py`` + ``comparison_queue.py``. Runs after worker bill upsert and after **PATCH …/site** (refresh prior ``site_id`` when bill moved). Bounded like **3a** (200 bills/site). *Optional later:* indexed SQL for huge sites. |
+| **3e** | **Shipped:** RQ backfill after worker upsert + **PATCH …/site**; **010** index ``ix_bills_org_site_period_sort``; SQL prior fetch (no full-site load for MoM); site scan default **500** (max **2000** via ``limits.py``); backfill lists bills without line items. |
 | **4b–4d** | Template copy + confidence from ``anomalies.evidence`` — ``build_explainability_v1`` (`app/services/explain/anomaly_v1.py`); nested ``explainability`` on anomaly JSON; UI **Grounding** + **Explanation** columns. |
 | **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete** button (hidden from list). |
 | **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
@@ -38,7 +38,6 @@ This document is the engineering counterpart to the product vision. **Product Ph
 ### Not started (still Phase 1 product scope)
 
 - **§3c:** site-to-site comparables (see **Possible future work** below).
-- **§5e:** free-text **note** on review transition (API may accept `note`; inbox UI does not expose it yet).
 - **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
 
 ### Deferred / optional (see also `product_roadmap.md`)
@@ -63,9 +62,9 @@ These are **not** in the current sprint; **§3c** stays out of repo until produc
 
 ### Suggested “resume here” order
 
-1. **§5e** — optional notes on review transitions in the UI (audit rows already persist server-side).  
-2. **§3e tuning** — indexed prior-bill SQL / higher caps when a single site exceeds ~200 bills.  
-3. **§3c** — only when pilot demand justifies cross-site comparison (see table above).
+1. **§3c** — site-to-site comparables when a pilot needs cross-location views.  
+2. **Cross-cutting P1–P5** — real auth, RBAC, observability, E2E smoke.  
+3. **§3e at extreme scale** — keyset/cursor site scans beyond **2000** bills per site (if needed).
 
 ---
 
@@ -151,7 +150,7 @@ Each **product milestone** below is split into **independent engineering steps**
 | **5b — Audit log** | **Shipped:** append-only **`anomaly_review_events`** (**009**); **`GET /api/v1/anomalies/{id}/review-events`**. | Optional UI later. |
 | **5c — Anomaly inbox API** | **Shipped:** list **`review_status`**, **`sort`**, **`order`** on **`GET /api/v1/anomalies`**. | Powers **Anomalies** filter. |
 | **5d — Review UI (inbox + detail)** | **Shipped:** inbox table **Review** + **Actions** (approve / dismiss / flag / reopen); row actions call **5a**. | Detail drawer for audit **TBD** (optional). |
-| **5e — Annotations / notes** | Free-text or structured note on transition. | **`note`** accepted on **`POST …/review`**; inbox UI **not** wired yet. |
+| **5e — Annotations / notes** | **Shipped:** optional **note** on **`POST …/review`**; inbox **modal** on Approve/Dismiss/Flag/Reopen; **History** loads **`GET …/review-events`**. |
 
 ---
 

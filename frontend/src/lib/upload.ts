@@ -72,6 +72,8 @@ export interface DocumentListItemResponse {
   source: string;
   processing_status: string;
   processing_error?: string | null;
+  /** Rollup from ``anomalies.review_status`` (null when no comparison signals). */
+  anomaly_review_status?: "open" | "approved" | "dismissed" | "flagged" | null;
   created_at: string;
 }
 
@@ -173,11 +175,23 @@ export interface AnomalyResponse {
   evidence: Record<string, unknown>;
   explainability: ExplainabilityResponse;
   review_status: "open" | "approved" | "dismissed" | "flagged";
+  latest_review_note?: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export type AnomalyReviewStatus = "open" | "approved" | "dismissed" | "flagged";
+
+/** One append-only row from ``GET …/anomalies/{id}/review-events`` (§5b). */
+export interface AnomalyReviewEventResponse {
+  id: string;
+  anomaly_id: string;
+  from_status: string;
+  to_status: string;
+  note: string | null;
+  actor_user_id: string | null;
+  created_at: string;
+}
 
 export interface PatchDocumentSiteResponse {
   document_id: string;
@@ -370,7 +384,7 @@ export async function postMaterializeAnomalyComparisons(
   opts?: { siteId?: string | null; limit?: number },
 ): Promise<MaterializeComparisonsResponse> {
   const params = new URLSearchParams();
-  params.set("limit", String(opts?.limit ?? 200));
+  params.set("limit", String(opts?.limit ?? 500));
   if (opts?.siteId) {
     params.set("site_id", opts.siteId);
   }
@@ -445,6 +459,22 @@ export async function postAnomalyReview(
     throw new Error(`Review transition failed (${res.status}): ${text}`);
   }
   return res.json() as Promise<AnomalyResponse>;
+}
+
+/** §5b: audit history for one anomaly (notes from §5e transitions). */
+export async function fetchAnomalyReviewEvents(
+  apiBase: string,
+  orgId: string,
+  anomalyId: string,
+): Promise<AnomalyReviewEventResponse[]> {
+  const res = await fetch(`${apiBase}/api/v1/anomalies/${anomalyId}/review-events`, {
+    headers: { "X-Organization-Id": orgId },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Review events failed (${res.status}): ${text}`);
+  }
+  return res.json() as Promise<AnomalyReviewEventResponse[]>;
 }
 
 /** Older bills for the same site (§3a). */

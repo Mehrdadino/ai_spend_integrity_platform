@@ -23,11 +23,9 @@ from sqlalchemy.orm import Session
 
 from app.repositories.bills import get_bill_for_org_document, list_bills_for_site
 from app.services.comparison.evaluate import evaluate_document_comparison
+from app.services.comparison.limits import DEFAULT_SITE_BILL_SCAN
 
 logger = logging.getLogger(__name__)
-
-# Match ``list_bills_for_site`` default cap in ``repositories/bills.py`` (3a/3e).
-_DEFAULT_SITE_BILL_SCAN = 200
 
 
 def document_ids_newest_through_anchor(
@@ -62,7 +60,7 @@ def run_document_comparison_backfill(
     *,
     organization_id: uuid.UUID,
     document_id: uuid.UUID,
-    site_bill_scan_limit: int = _DEFAULT_SITE_BILL_SCAN,
+    site_bill_scan_limit: int = DEFAULT_SITE_BILL_SCAN,
 ) -> list[uuid.UUID]:
     """Recompute §3d anomalies for the anchor document and any needed same-site neighbors.
 
@@ -93,6 +91,7 @@ def run_document_comparison_backfill(
         organization_id=organization_id,
         site_id=current.site_id,
         limit=site_bill_scan_limit,
+        load_line_items=False,
     )
     ordered_doc_ids = [b.document_id for b in bills]
     targets = document_ids_newest_through_anchor(ordered_doc_ids, document_id)
@@ -121,7 +120,7 @@ def run_site_wide_comparison_refresh(
     *,
     organization_id: uuid.UUID,
     site_id: uuid.UUID,
-    site_bill_scan_limit: int = _DEFAULT_SITE_BILL_SCAN,
+    site_bill_scan_limit: int = DEFAULT_SITE_BILL_SCAN,
 ) -> list[uuid.UUID]:
     """Re-run comparison for every bill currently on this site (repair after a bill moved away).
 
@@ -133,6 +132,7 @@ def run_site_wide_comparison_refresh(
         organization_id=organization_id,
         site_id=site_id,
         limit=site_bill_scan_limit,
+        load_line_items=False,
     )
     touched: list[uuid.UUID] = []
     for b in bills:

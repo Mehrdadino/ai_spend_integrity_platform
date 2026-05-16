@@ -124,4 +124,11 @@ class DocumentListItemResponse(BaseModel):
     source: str
     processing_status: str
     processing_error: Optional[str] = None
+    anomaly_review_status: Optional[str] = Field(
+        None,
+        description=(
+            "Rollup of ``anomalies.review_status`` for this document "
+            "(flagged > open > dismissed > approved); null when no anomalies."
+        ),
+    )
     created_at: datetime

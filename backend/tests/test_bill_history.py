@@ -9,6 +9,7 @@ from app.models.bill import Bill
 from app.services.comparison.period import (
     bill_period_sort_key,
     effective_period_end,
+    is_bill_older_than,
     select_prior_bills,
 )
 
@@ -47,6 +48,29 @@ class TestEffectivePeriodEnd(unittest.TestCase):
     def test_falls_back_to_created_at_date(self) -> None:
         b = _bill(created_at=datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc))
         self.assertEqual(effective_period_end(b), date(2026, 5, 10))
+
+
+class TestIsBillOlderThan(unittest.TestCase):
+    def test_older_by_period_end(self) -> None:
+        current = _bill(period_end=date(2026, 3, 1))
+        older = _bill(period_end=date(2026, 2, 1))
+        self.assertTrue(is_bill_older_than(current, older))
+        self.assertFalse(is_bill_older_than(older, current))
+
+    def test_tie_breaks_on_created_at_then_id(self) -> None:
+        shared = date(2026, 3, 1)
+        earlier = _bill(
+            bill_id=uuid.UUID("00000000-0000-4000-8000-000000000001"),
+            period_end=shared,
+            created_at=datetime(2026, 3, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        later = _bill(
+            bill_id=uuid.UUID("00000000-0000-4000-8000-000000000002"),
+            period_end=shared,
+            created_at=datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        self.assertTrue(is_bill_older_than(later, earlier))
+        self.assertFalse(is_bill_older_than(earlier, later))
 
 
 class TestSelectPriorBills(unittest.TestCase):

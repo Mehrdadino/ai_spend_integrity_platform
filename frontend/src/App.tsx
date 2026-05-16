@@ -2,7 +2,17 @@
  * Phase 1 ingestion UI: presigned upload, document list, anomaly inbox (§5 review actions), viewer (bill + comparison).
  * Visual design: glass nav, gradient chrome, high-legibility type (Plus Jakarta Sans).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   createOrganization,
   fetchOrganizationsList,
@@ -13,6 +23,7 @@ import {
   completeUpload,
   deleteDocument,
   fetchAnomaliesList,
+  fetchAnomalyReviewEvents,
   fetchDocumentBill,
   fetchDocumentComparison,
   fetchDocumentPriorBills,
@@ -29,6 +40,7 @@ import {
   type CompleteUploadResponse,
   type DocumentListItemResponse,
   type AnomalyResponse,
+  type AnomalyReviewEventResponse,
   type DocumentComparisonResponse,
   type DocumentPriorBillsResponse,
   type DocumentViewerResponse,
@@ -132,15 +144,117 @@ function reviewStatusLabel(status: string): string {
   }
 }
 
-/** §5a row actions — buttons stop row navigation via handler. */
+/** True when a table row click should not open the document viewer (action buttons, etc.). */
+function isAnomalyRowInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest(".anomaly-actions-cell, button, a, select, textarea, input, label"));
+}
+
+/** §5e: confirm transition with optional audit note before POST …/review. */
+function ReviewTransitionModal({
+  actionLabel,
+  note,
+  busy,
+  openedAtMs,
+  onNoteChange,
+  onConfirm,
+  onCancel,
+}: {
+  actionLabel: string;
+  note: string;
+  busy: boolean;
+  openedAtMs: number;
+  onNoteChange: (value: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="review-modal-overlay"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) {
+          return;
+        }
+        if (Date.now() - openedAtMs < 400) {
+          return;
+        }
+        onCancel();
+      }}
+    >
+      <div
+        className="review-modal card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-modal-title"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <h3 id="review-modal-title">{actionLabel}</h3>
+        <p className="hint">Optional note is stored on the audit trail for this transition (§5e).</p>
+        <label className="field">
+          <span>Note</span>
+          <textarea
+            value={note}
+            onChange={(e) => onNoteChange(e.target.value)}
+            placeholder="e.g. Verified with store manager; expected seasonal spike."
+            rows={4}
+            maxLength={8000}
+            disabled={busy}
+          />
+        </label>
+        <div className="review-modal-actions">
+          <button type="button" className="primary" disabled={busy} onClick={() => onConfirm()}>
+            {busy ? "Saving…" : "Confirm"}
+          </button>
+          <button type="button" className="secondary" disabled={busy} onClick={() => onCancel()}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** §5b inline audit list under an anomaly row when expanded. */
+function AnomalyReviewEventsPanel({ events, loading }: { events: AnomalyReviewEventResponse[]; loading: boolean }) {
+  if (loading) {
+    return <p className="hint review-events-loading">Loading review history…</p>;
+  }
+  if (events.length === 0) {
+    return <p className="hint">No review transitions yet.</p>;
+  }
+  return (
+    <ul className="review-events-list">
+      {events.map((ev) => (
+        <li key={ev.id} className="review-events-item">
+          <span className="review-events-meta">
+            {new Date(ev.created_at).toLocaleString()} — {reviewStatusLabel(ev.from_status)} →{" "}
+            {reviewStatusLabel(ev.to_status)}
+          </span>
+          {ev.note ? <p className="review-events-note">{ev.note}</p> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** §5a row actions — open §5e modal before POST; History toggles audit rows. */
 function AnomalyReviewActions({
   row,
   busy,
-  onReview,
+  historyExpanded,
+  historyLoading,
+  onRequestReview,
+  onToggleHistory,
 }: {
   row: AnomalyResponse;
   busy: boolean;
-  onReview: (e: MouseEvent<HTMLButtonElement>, anomalyId: string, to: AnomalyReviewStatus) => void;
+  historyExpanded: boolean;
+  historyLoading: boolean;
+  onRequestReview: (e: MouseEvent<HTMLButtonElement>, anomalyId: string, to: AnomalyReviewStatus, label: string) => void;
+  onToggleHistory: (e: MouseEvent<HTMLButtonElement>, anomalyId: string) => void;
 }) {
   const s = row.review_status;
   const mk = (label: string, to: AnomalyReviewStatus, classExtra?: string) => (
@@ -149,38 +263,52 @@ function AnomalyReviewActions({
       key={`${row.id}-${to}`}
       className={`secondary anomaly-action-btn${classExtra ? ` ${classExtra}` : ""}`}
       disabled={busy}
-      onClick={(e) => onReview(e, row.id, to)}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => onRequestReview(e, row.id, to, label)}
     >
       {label}
     </button>
   );
+  let actions: ReactNode;
   if (s === "open") {
-    return (
-      <div className="anomaly-actions">
+    actions = (
+      <>
         {mk("Approve", "approved")}
         {mk("Dismiss", "dismissed")}
         {mk("Flag", "flagged", "anomaly-action-btn--flag")}
-      </div>
+      </>
     );
-  }
-  if (s === "flagged") {
-    return (
-      <div className="anomaly-actions">
+  } else if (s === "flagged") {
+    actions = (
+      <>
         {mk("Approve", "approved")}
         {mk("Dismiss", "dismissed")}
-        {mk("Open", "open")}
-      </div>
+        {mk("Reopen", "open")}
+      </>
     );
-  }
-  if (s === "approved" || s === "dismissed") {
-    return (
-      <div className="anomaly-actions">
-        {mk("Open", "open")}
+  } else if (s === "approved" || s === "dismissed") {
+    actions = (
+      <>
+        {mk("Reopen", "open")}
         {mk("Flag", "flagged", "anomaly-action-btn--flag")}
-      </div>
+      </>
     );
+  } else {
+    actions = null;
   }
-  return <div className="anomaly-actions" />;
+  return (
+    <div className="anomaly-actions">
+      {actions}
+      <button
+        type="button"
+        className="secondary anomaly-action-btn anomaly-action-btn--history"
+        disabled={busy || historyLoading}
+        onClick={(e) => onToggleHistory(e, row.id)}
+      >
+        {historyLoading ? "…" : historyExpanded ? "Hide notes" : "History"}
+      </button>
+    </div>
+  );
 }
 
 function storeSiteIdForOrg(orgId: string, siteId: string): void {
@@ -746,6 +874,20 @@ export function App() {
   /** §5c inbox filter: empty string = all statuses. */
   const [anomalyReviewFilter, setAnomalyReviewFilter] = useState<string>("");
   const [anomalyReviewBusyId, setAnomalyReviewBusyId] = useState<string | null>(null);
+  /** §5e modal: set when user picks Approve/Dismiss/Flag/Reopen before POST. */
+  const [pendingReview, setPendingReview] = useState<{
+    anomalyId: string;
+    toStatus: AnomalyReviewStatus;
+    actionLabel: string;
+  } | null>(null);
+  const [reviewNoteDraft, setReviewNoteDraft] = useState("");
+  const [reviewEventsExpandedId, setReviewEventsExpandedId] = useState<string | null>(null);
+  const [reviewEventsByAnomalyId, setReviewEventsByAnomalyId] = useState<
+    Record<string, AnomalyReviewEventResponse[]>
+  >({});
+  const [reviewEventsLoadingId, setReviewEventsLoadingId] = useState<string | null>(null);
+  /** Timestamp when §5e modal opened (backdrop ignores dismiss briefly after). */
+  const reviewModalOpenedAtRef = useRef(0);
   /** Keep spinner visible from reprocess click until worker finishes and bill refetch settles. */
   const [pipelineHold, setPipelineHold] = useState(false);
   const loadedViewerDocIdRef = useRef<string | null>(null);
@@ -1136,13 +1278,13 @@ export function App() {
         if (opts?.materializeFirst) {
           await postMaterializeAnomalyComparisons(apiBase.trim(), orgId.trim(), {
             siteId: selectedSiteId || undefined,
-            limit: 200,
+            limit: 500,
           });
         }
         const rows = await fetchAnomaliesList(apiBase.trim(), orgId.trim(), {
           siteId: selectedSiteId || undefined,
           reviewStatus: anomalyReviewFilter ? (anomalyReviewFilter as AnomalyReviewStatus) : undefined,
-          limit: 200,
+          limit: 500,
         });
         setAnomalyRows(rows);
       } catch (e) {
@@ -1155,25 +1297,98 @@ export function App() {
     [apiBase, orgId, selectedSiteId, anomalyReviewFilter],
   );
 
-  const handleAnomalyReview = useCallback(
-    async (e: MouseEvent<HTMLButtonElement>, anomalyId: string, toStatus: AnomalyReviewStatus) => {
+  const handleRequestAnomalyReview = useCallback(
+    (e: MouseEvent<HTMLButtonElement>, anomalyId: string, toStatus: AnomalyReviewStatus, actionLabel: string) => {
       e.stopPropagation();
       e.preventDefault();
+      reviewModalOpenedAtRef.current = Date.now();
+      setPendingReview({ anomalyId, toStatus, actionLabel });
+      setReviewNoteDraft("");
+    },
+    [],
+  );
+
+  const handleCancelAnomalyReview = useCallback(() => {
+    if (anomalyReviewBusyId) {
+      return;
+    }
+    setPendingReview(null);
+    setReviewNoteDraft("");
+  }, [anomalyReviewBusyId]);
+
+  const handleConfirmAnomalyReview = useCallback(async () => {
+    if (!pendingReview || !apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+      return;
+    }
+    const { anomalyId, toStatus } = pendingReview;
+    setAnomalyReviewBusyId(anomalyId);
+    setAnomalyListError(null);
+    try {
+      const note = reviewNoteDraft.trim() || null;
+      await postAnomalyReview(apiBase.trim(), orgId.trim(), anomalyId, {
+        to_status: toStatus,
+        note,
+      });
+      setPendingReview(null);
+      setReviewNoteDraft("");
+      setReviewEventsByAnomalyId((prev) => {
+        const next = { ...prev };
+        delete next[anomalyId];
+        return next;
+      });
+      await loadAnomalyList();
+      if (reviewEventsExpandedId === anomalyId) {
+        setReviewEventsLoadingId(anomalyId);
+        try {
+          const events = await fetchAnomalyReviewEvents(apiBase.trim(), orgId.trim(), anomalyId);
+          setReviewEventsByAnomalyId((prev) => ({ ...prev, [anomalyId]: events }));
+        } catch (err) {
+          setAnomalyListError(err instanceof Error ? err.message : String(err));
+        } finally {
+          setReviewEventsLoadingId(null);
+        }
+      }
+    } catch (err) {
+      setAnomalyListError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAnomalyReviewBusyId(null);
+    }
+  }, [
+    pendingReview,
+    apiBase,
+    orgId,
+    reviewNoteDraft,
+    loadAnomalyList,
+    reviewEventsExpandedId,
+  ]);
+
+  const handleToggleAnomalyReviewHistory = useCallback(
+    async (e: MouseEvent<HTMLButtonElement>, anomalyId: string) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (reviewEventsExpandedId === anomalyId) {
+        setReviewEventsExpandedId(null);
+        return;
+      }
       if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
         return;
       }
-      setAnomalyReviewBusyId(anomalyId);
+      setReviewEventsExpandedId(anomalyId);
+      if (reviewEventsByAnomalyId[anomalyId]) {
+        return;
+      }
+      setReviewEventsLoadingId(anomalyId);
       setAnomalyListError(null);
       try {
-        await postAnomalyReview(apiBase.trim(), orgId.trim(), anomalyId, { to_status: toStatus });
-        await loadAnomalyList();
+        const events = await fetchAnomalyReviewEvents(apiBase.trim(), orgId.trim(), anomalyId);
+        setReviewEventsByAnomalyId((prev) => ({ ...prev, [anomalyId]: events }));
       } catch (err) {
         setAnomalyListError(err instanceof Error ? err.message : String(err));
       } finally {
-        setAnomalyReviewBusyId(null);
+        setReviewEventsLoadingId(null);
       }
     },
-    [apiBase, orgId, loadAnomalyList],
+    [apiBase, orgId, reviewEventsExpandedId, reviewEventsByAnomalyId],
   );
 
   const goToDocuments = useCallback(() => {
@@ -1667,6 +1882,7 @@ export function App() {
                     <tr>
                       <th>Created</th>
                       <th>Status</th>
+                      <th>Review</th>
                       <th>Error</th>
                       <th>Source</th>
                       <th>MIME</th>
@@ -1693,6 +1909,17 @@ export function App() {
                         <td>{new Date(row.created_at).toLocaleString()}</td>
                         <td>
                           <span className={statusPillClass(row.processing_status)}>{row.processing_status}</span>
+                        </td>
+                        <td>
+                          {row.anomaly_review_status ? (
+                            <span
+                              className={`review-status-pill review-status-pill--${row.anomaly_review_status}`}
+                            >
+                              {reviewStatusLabel(row.anomaly_review_status)}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
                         </td>
                         <td className="cell-error" title={row.processing_error ?? undefined}>
                           {row.processing_error ? row.processing_error : "—"}
@@ -1784,18 +2011,27 @@ export function App() {
                     <th>Explanation</th>
                     <th>Summary</th>
                     <th>Review</th>
+                    <th>Note</th>
                     <th>Actions</th>
                     <th>Document</th>
                   </tr>
                 </thead>
                 <tbody>
                   {anomalyRows.map((row) => (
+                    <Fragment key={row.id}>
                     <tr
-                      key={row.id}
                       className="doc-table__row"
-                      onClick={() => openAnomalyContext(row.document_id)}
+                      onClick={(e) => {
+                        if (isAnomalyRowInteractiveTarget(e.target)) {
+                          return;
+                        }
+                        openAnomalyContext(row.document_id);
+                      }}
                       onKeyDown={(ev) => {
                         if (ev.key === "Enter" || ev.key === " ") {
+                          if (isAnomalyRowInteractiveTarget(ev.target)) {
+                            return;
+                          }
                           ev.preventDefault();
                           openAnomalyContext(row.document_id);
                         }
@@ -1828,6 +2064,9 @@ export function App() {
                           {reviewStatusLabel(row.review_status)}
                         </span>
                       </td>
+                      <td className="anomaly-note-cell" title={row.latest_review_note ?? undefined}>
+                        {row.latest_review_note ?? "—"}
+                      </td>
                       <td
                         className="anomaly-actions-cell"
                         onClick={(e) => e.stopPropagation()}
@@ -1835,11 +2074,25 @@ export function App() {
                         <AnomalyReviewActions
                           row={row}
                           busy={anomalyReviewBusyId === row.id}
-                          onReview={handleAnomalyReview}
+                          historyExpanded={reviewEventsExpandedId === row.id}
+                          historyLoading={reviewEventsLoadingId === row.id}
+                          onRequestReview={handleRequestAnomalyReview}
+                          onToggleHistory={handleToggleAnomalyReviewHistory}
                         />
                       </td>
                       <td className="cell-mono cell-id">{row.document_id}</td>
                     </tr>
+                    {reviewEventsExpandedId === row.id ? (
+                      <tr className="review-events-row">
+                        <td colSpan={11}>
+                          <AnomalyReviewEventsPanel
+                            events={reviewEventsByAnomalyId[row.id] ?? []}
+                            loading={reviewEventsLoadingId === row.id}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -1935,6 +2188,20 @@ export function App() {
           </section>
         </>
       )}
+      {pendingReview
+        ? createPortal(
+            <ReviewTransitionModal
+              actionLabel={pendingReview.actionLabel}
+              note={reviewNoteDraft}
+              busy={anomalyReviewBusyId === pendingReview.anomalyId}
+              openedAtMs={reviewModalOpenedAtRef.current}
+              onNoteChange={setReviewNoteDraft}
+              onConfirm={() => void handleConfirmAnomalyReview()}
+              onCancel={handleCancelAnomalyReview}
+            />,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

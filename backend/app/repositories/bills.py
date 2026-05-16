@@ -5,15 +5,13 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Date, cast, func, select
+from sqlalchemy import Date, and_, cast, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.bill import Bill
 from app.models.document import Document
-from app.services.comparison.period import select_prior_bills
-
-# Cap rows loaded per site when selecting priors (3a); §3e can add indexed SQL cursors later.
-_DEFAULT_SITE_BILL_SCAN = 200
+from app.services.comparison.limits import DEFAULT_SITE_BILL_SCAN, MAX_SITE_BILL_SCAN
+from app.services.comparison.period import effective_period_end
 
 
 def _bill_period_end_expr():
@@ -22,6 +20,28 @@ def _bill_period_end_expr():
         Bill.period_end,
         Bill.period_start,
         cast(Bill.created_at, Date()),
+    )
+
+
+def _clamp_site_scan_limit(limit: int) -> int:
+    """Keep site history scans within §3e bounds."""
+    return max(1, min(limit, MAX_SITE_BILL_SCAN))
+
+
+def _bill_is_older_than_current_filter(period_end_col, bill: Bill):
+    """SQL filter: rows strictly older than ``bill`` in newest-first site ordering."""
+    cur_period = effective_period_end(bill)
+    return or_(
+        period_end_col < cur_period,
+        and_(
+            period_end_col == cur_period,
+            Bill.created_at < bill.created_at,
+        ),
+        and_(
+            period_end_col == cur_period,
+            Bill.created_at == bill.created_at,
+            Bill.id < bill.id,
+        ),
     )
 
 
@@ -50,10 +70,15 @@ def list_bills_for_site(
     *,
     organization_id: uuid.UUID,
     site_id: uuid.UUID,
-    limit: int = _DEFAULT_SITE_BILL_SCAN,
+    limit: int = DEFAULT_SITE_BILL_SCAN,
+    load_line_items: bool = True,
 ) -> list[Bill]:
-    """All bills for a site in this org, newest billing period first (§3a)."""
+    """All bills for a site in this org, newest billing period first (§3a / §3e).
+
+    ``load_line_items=False`` skips the line-item join for backfill ordering (document ids only).
+    """
     period_end = _bill_period_end_expr()
+    cap = _clamp_site_scan_limit(limit)
     stmt = (
         select(Bill)
         .join(Document, Document.id == Bill.document_id)
@@ -63,7 +88,34 @@ def list_bills_for_site(
             Document.deleted_at.is_(None),
         )
         .order_by(period_end.desc(), Bill.created_at.desc(), Bill.id.desc())
-        .limit(max(1, min(limit, 500)))
+        .limit(cap)
+    )
+    if load_line_items:
+        stmt = stmt.options(selectinload(Bill.line_items))
+    return list(session.scalars(stmt).all())
+
+
+def _list_prior_bills_for_bill_sql(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    bill: Bill,
+    limit: int,
+) -> list[Bill]:
+    """Indexed SQL path: fetch up to ``limit`` older same-site bills (no full-site scan)."""
+    period_end = _bill_period_end_expr()
+    stmt = (
+        select(Bill)
+        .join(Document, Document.id == Bill.document_id)
+        .where(
+            Bill.organization_id == organization_id,
+            Bill.site_id == bill.site_id,
+            Document.deleted_at.is_(None),
+            Bill.id != bill.id,
+            _bill_is_older_than_current_filter(period_end, bill),
+        )
+        .order_by(period_end.desc(), Bill.created_at.desc(), Bill.id.desc())
+        .limit(max(1, limit))
         .options(selectinload(Bill.line_items))
     )
     return list(session.scalars(stmt).all())
@@ -81,12 +133,13 @@ def get_prior_bills_for_bill(
         return []
     if bill.organization_id != organization_id:
         return []
-    ordered = list_bills_for_site(
+    # SQL path matches newest-first site ordering without loading the full site chain.
+    return _list_prior_bills_for_bill_sql(
         session,
         organization_id=organization_id,
-        site_id=bill.site_id,
+        bill=bill,
+        limit=limit,
     )
-    return select_prior_bills(ordered, bill.id, limit=limit)
 
 
 def get_prior_bills_for_org_document(

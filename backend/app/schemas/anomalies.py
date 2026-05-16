@@ -72,6 +72,10 @@ class AnomalyResponse(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
     explainability: ExplainabilityResponse
     review_status: REVIEW_STATUS_LITERAL
+    latest_review_note: Optional[str] = Field(
+        None,
+        description="Most recent non-empty note from §5b audit events for this anomaly.",
+    )
     created_at: datetime
     updated_at: datetime
 

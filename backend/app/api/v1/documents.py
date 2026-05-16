@@ -22,6 +22,7 @@ from app.models.document import Document
 from app.models.organization import Organization
 from app.repositories.bills import get_bill_for_org_document, get_prior_bills_for_org_document
 from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
+from app.repositories.anomalies import review_status_by_document_ids
 from app.repositories.documents import get_document_for_organization, list_documents_for_organization
 from app.schemas.bills import BillResponse, DocumentBillResponse, DocumentPriorBillsResponse
 from app.schemas.comparison import DocumentComparisonResponse
@@ -98,6 +99,11 @@ def get_documents(
 ) -> list[DocumentListItemResponse]:
     """List documents for the tenant (step 1h): ingestion / pipeline status overview."""
     rows = list_documents_for_organization(db, organization_id=org.id, limit=limit)
+    review_by_doc = review_status_by_document_ids(
+        db,
+        organization_id=org.id,
+        document_ids=[doc.id for doc in rows],
+    )
     return [
         DocumentListItemResponse(
             document_id=doc.id,
@@ -108,6 +114,7 @@ def get_documents(
             source=doc.source,
             processing_status=doc.processing_status,
             processing_error=doc.processing_error,
+            anomaly_review_status=review_by_doc.get(doc.id),
             created_at=doc.created_at,
         )
         for doc in rows

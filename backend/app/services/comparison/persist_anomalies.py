@@ -1,7 +1,8 @@
 """§3d persistence: write ``anomalies`` rows from §3b ``ComparisonFindingResponse`` objects.
 
-Deleting prior rows for ``(bill_id, rule_pack_version)`` keeps the table aligned with reruns /
-reprocessed bills without leaving stale fingerprints behind.
+Re-running comparison **updates** rows that share the same ``fingerprint`` so §5 ``review_status``
+and audit history survive inbox Refresh / backfill. Rows for findings that disappeared are removed;
+new fingerprints insert as ``review_status=open``.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import uuid
 from datetime import date
 from typing import Any, Optional, Sequence
 
-from sqlalchemy import delete
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.anomaly import Anomaly
@@ -27,31 +28,58 @@ def replace_anomalies_for_comparison(
     findings: Sequence[ComparisonFindingResponse],
     rule_pack_version: str,
 ) -> None:
-    """Delete existing snapshot rows then insert anomalies derived from ``findings``.
+    """Upsert §3d rows for ``(bill_id, rule_pack_version)``; preserve §5 review on stable fingerprints.
 
     ``current`` must be the normalized bill instance (rule pack callers load ``line_items``).
-
-    Use a Core ``DELETE`` (no pre-load) when the session has not already attached ``Anomaly``
-    rows for this bill—typical for ``GET …/bill/comparison``. That avoids loading rows into
-    the identity map; ``Bill.anomalies`` uses ``passive_deletes`` so bill replacement does not
-    emit invalid ``UPDATE anomalies SET bill_id = NULL``. Do **not** pair Core deletes with
-    ``session.expire_all()`` (that expired the live ``Bill`` and led to bad flushes).
     """
-    session.execute(
-        delete(Anomaly).where(
-            Anomaly.bill_id == current.id,
-            Anomaly.rule_pack_version == rule_pack_version,
-        )
+    existing = list(
+        session.scalars(
+            select(Anomaly).where(
+                Anomaly.bill_id == current.id,
+                Anomaly.rule_pack_version == rule_pack_version,
+            )
+        ).all()
     )
+    existing_by_fp = {row.fingerprint: row for row in existing}
 
-    rows = _flatten_findings_into_rows(
+    incoming = _flatten_findings_into_rows(
         current,
         findings,
         compared_to_bill_id,
         rule_pack_version,
     )
-    session.add_all(rows)
+    incoming_fps: set[str] = set()
+
+    for template in incoming:
+        incoming_fps.add(template.fingerprint)
+        prior = existing_by_fp.get(template.fingerprint)
+        if prior is not None:
+            _refresh_anomaly_comparison_fields(prior, template)
+            continue
+        session.add(template)
+
+    for fp, stale in existing_by_fp.items():
+        if fp not in incoming_fps:
+            session.delete(stale)
+
     session.flush()
+
+
+def _refresh_anomaly_comparison_fields(target: Anomaly, template: Anomaly) -> None:
+    """Copy latest §3b snapshot onto an existing row; keep ``id``, ``review_status``, ``created_at``."""
+    target.organization_id = template.organization_id
+    target.site_id = template.site_id
+    target.document_id = template.document_id
+    target.bill_id = template.bill_id
+    target.bill_line_item_id = template.bill_line_item_id
+    target.compared_to_bill_id = template.compared_to_bill_id
+    target.rule_id = template.rule_id
+    target.period_end = template.period_end
+    target.fingerprint = template.fingerprint
+    target.severity = template.severity
+    target.title = template.title
+    target.summary = template.summary
+    target.evidence = template.evidence
 
 
 def _period_anchor(bill: Bill) -> Optional[date]:

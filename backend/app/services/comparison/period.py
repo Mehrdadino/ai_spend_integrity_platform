@@ -35,6 +35,11 @@ def bill_period_sort_key(bill: Bill) -> tuple[date, datetime, UUID]:
     return (effective_period_end(bill), bill.created_at, bill.id)
 
 
+def is_bill_older_than(current: Bill, candidate: Bill) -> bool:
+    """True when ``candidate`` is strictly older than ``current`` (newest-first site order)."""
+    return bill_period_sort_key(candidate) < bill_period_sort_key(current)
+
+
 def select_prior_bills(
     ordered_newest_first: Sequence[Bill],
     current_bill_id: UUID,

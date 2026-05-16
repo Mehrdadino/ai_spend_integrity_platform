@@ -28,8 +28,8 @@ def _utc_now() -> datetime:
 class Anomaly(Base):
     """One surfaced comparison signal for a normalized ``Bill`` (from §3b rule packs).
 
-    Reruns of ``GET …/bill/comparison`` delete + rewrite rows for ``(bill_id, rule_pack_version)``
-    so the dashboard reflects the latest structured bill snapshot.
+    Reruns of comparison upsert rows for ``(bill_id, rule_pack_version)`` by ``fingerprint`` so
+    metrics refresh but §5 ``review_status`` (and audit events) survive when the finding is unchanged.
     """
 
     __tablename__ = "anomalies"
