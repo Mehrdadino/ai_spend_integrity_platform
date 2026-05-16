@@ -21,9 +21,14 @@ from collections.abc import Sequence
 
 from sqlalchemy.orm import Session
 
-from app.repositories.bills import get_bill_for_org_document, list_bills_for_site
+from app.config import get_settings
+from app.repositories.bills import (
+    get_bill_for_org_document,
+    iter_document_ids_for_site_keyset,
+    list_document_ids_newest_through_anchor,
+)
 from app.services.comparison.evaluate import evaluate_document_comparison
-from app.services.comparison.limits import DEFAULT_SITE_BILL_SCAN
+from app.services.comparison.limits import DEFAULT_SITE_REFRESH_MAX_BILLS
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +65,7 @@ def run_document_comparison_backfill(
     *,
     organization_id: uuid.UUID,
     document_id: uuid.UUID,
-    site_bill_scan_limit: int = DEFAULT_SITE_BILL_SCAN,
+    site_bill_scan_limit: int | None = None,
 ) -> list[uuid.UUID]:
     """Recompute §3d anomalies for the anchor document and any needed same-site neighbors.
 
@@ -86,22 +91,13 @@ def run_document_comparison_backfill(
         session.commit()
         return [document_id]
 
-    bills = list_bills_for_site(
+    # Indexed SQL: only bills whose prior chain may have changed (not capped at 500/2000).
+    _ = site_bill_scan_limit  # legacy RQ kwarg; ignored since §3e scale SQL path.
+    targets = list_document_ids_newest_through_anchor(
         session,
         organization_id=organization_id,
-        site_id=current.site_id,
-        limit=site_bill_scan_limit,
-        load_line_items=False,
+        anchor=current,
     )
-    ordered_doc_ids = [b.document_id for b in bills]
-    targets = document_ids_newest_through_anchor(ordered_doc_ids, document_id)
-    if len(targets) == 1 and targets[0] == document_id and document_id not in ordered_doc_ids:
-        logger.warning(
-            "comparison backfill: anchor document %s not in site list (scan limit=%s); "
-            "single evaluation only",
-            document_id,
-            site_bill_scan_limit,
-        )
 
     touched: list[uuid.UUID] = []
     for doc_id in targets:
@@ -120,27 +116,38 @@ def run_site_wide_comparison_refresh(
     *,
     organization_id: uuid.UUID,
     site_id: uuid.UUID,
-    site_bill_scan_limit: int = DEFAULT_SITE_BILL_SCAN,
+    site_bill_scan_limit: int | None = None,
 ) -> list[uuid.UUID]:
-    """Re-run comparison for every bill currently on this site (repair after a bill moved away).
+    """Re-run comparison for every bill on this site (repair after a bill moved away).
 
-    Bounded by ``site_bill_scan_limit`` to match ``list_bills_for_site``. Commits after each
-    document so the session stays consistent with §3d replace/delete semantics.
+    Uses keyset pages so sites with >2000 bills are not truncated. Commits after each document.
     """
-    bills = list_bills_for_site(
+    _ = site_bill_scan_limit  # legacy RQ kwarg
+    settings = get_settings()
+    max_bills = settings.site_bill_refresh_max_bills
+    if max_bills < 0:
+        max_bills = DEFAULT_SITE_REFRESH_MAX_BILLS
+    page_size = max(1, settings.site_bill_keyset_page_size)
+    touched: list[uuid.UUID] = []
+    for doc_id in iter_document_ids_for_site_keyset(
         session,
         organization_id=organization_id,
         site_id=site_id,
-        limit=site_bill_scan_limit,
-        load_line_items=False,
-    )
-    touched: list[uuid.UUID] = []
-    for b in bills:
+        page_size=page_size,
+        max_bills=max_bills,
+    ):
         evaluate_document_comparison(
             session,
             organization_id=organization_id,
-            document_id=b.document_id,
+            document_id=doc_id,
         )
         session.commit()
-        touched.append(b.document_id)
+        touched.append(doc_id)
+    if max_bills > 0 and len(touched) >= max_bills:
+        logger.warning(
+            "comparison site refresh: hit max_bills=%s for site=%s org=%s",
+            max_bills,
+            site_id,
+            organization_id,
+        )
     return touched

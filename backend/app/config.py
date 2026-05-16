@@ -60,6 +60,21 @@ class Settings(BaseSettings):
     ocr_dpi: int = 300
     ocr_max_pages: int = 10
 
+    # P1 auth: JWT is the primary tenant + user context for org-scoped routes.
+    # Set ``auth_allow_dev_org_header=true`` to keep ``X-Organization-Id`` for scripts/CI.
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60 * 24 * 7
+    auth_allow_dev_org_header: bool = True
+
+    # P3 org bootstrap: when set, ``GET/POST /organizations`` require this header value.
+    org_bootstrap_token: str = ""
+
+    # §3e: keyset page size when walking very long site histories in one RQ job.
+    site_bill_keyset_page_size: int = 200
+    # Safety cap on bills processed per site-wide refresh job (0 = unlimited).
+    site_bill_refresh_max_bills: int = 10_000
+
 
 @lru_cache
 def get_settings() -> Settings:

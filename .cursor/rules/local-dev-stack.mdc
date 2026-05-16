@@ -44,6 +44,8 @@ If **`venv`** or **`pip`** fails with **`pyexpat`** / **`XML_SetAllocTrackerActi
 
 For Alembic and one-off scripts, activate the venv first, then **`python -m alembic`** / **`python -m app.scripts...`**.
 
+Console shortcuts like **`seed-dev-org`** come from **`pip install -e .`** (or **`uv sync`**) in `backend/`. If a new script is missing (`command not found`), reinstall or run the module directly, e.g. **`python -m app.scripts.seed_dev_user`**.
+
 ## One terminal: API + worker + Vite + Docker deps
 
 ```bash
@@ -52,7 +54,7 @@ cd /path/to/ai_spend_integrity_platform
 ```
 
 - Starts **Postgres (15432)**, **MinIO**, **Redis**, **RQ document worker**, **Uvicorn** (`http://127.0.0.1:8000`), **Vite** (`http://127.0.0.1:5173`).
-- Waits for Postgres, runs **`seed-dev-org`** (dev org UUID for **`VITE_ORG_ID`** / **`X-Organization-Id`**).
+- Waits for Postgres, runs **`seed-dev-org`** (dev org UUID) and **`seed-dev-user`** (default admin login for the UI).
 - **Ctrl+C** stops API, worker, and Vite; **Docker containers keep running** (`docker compose down` to stop them).
 - **`SKIP_DOCUMENT_WORKER=1 ./scripts/dev.sh`** — skip the RQ worker if Redis/worker is not needed.
 

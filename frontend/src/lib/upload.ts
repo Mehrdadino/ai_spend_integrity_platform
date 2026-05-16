@@ -1,3 +1,5 @@
+import { tenantHeaders, tenantJsonHeaders } from "./api";
+
 /**
  * Client for document APIs: presigned upload (1b–1c), list + detail (1h, 2a),
  * and presigned read URLs for in-browser preview (GET ``…/viewer`` / ``read-url``).
@@ -198,13 +200,6 @@ export interface PatchDocumentSiteResponse {
   site_id: string | null;
 }
 
-function orgHeaders(orgId: string): HeadersInit {
-  return {
-    "Content-Type": "application/json",
-    "X-Organization-Id": orgId,
-  };
-}
-
 /** Step 1: ask API for a presigned PUT URL and a pending ``Document`` row. */
 export async function presignUpload(
   apiBase: string,
@@ -222,7 +217,7 @@ export async function presignUpload(
   }
   const res = await fetch(`${apiBase}/api/v1/documents/presigned-upload`, {
     method: "POST",
-    headers: orgHeaders(orgId),
+    headers: tenantJsonHeaders(orgId),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -273,7 +268,7 @@ export async function completeUpload(
 ): Promise<CompleteUploadResponse> {
   const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/complete-upload`, {
     method: "POST",
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -290,7 +285,7 @@ export async function fetchDocumentsList(
 ): Promise<DocumentListItemResponse[]> {
   const params = new URLSearchParams({ limit: String(limit) });
   const res = await fetch(`${apiBase}/api/v1/documents?${params}`, {
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -306,7 +301,7 @@ export async function fetchDocumentDetail(
   documentId: string,
 ): Promise<DocumentDetailResponse> {
   const res = await fetch(`${apiBase}/api/v1/documents/${documentId}`, {
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -322,7 +317,7 @@ export async function fetchDocumentViewer(
   documentId: string,
 ): Promise<DocumentViewerResponse> {
   const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/viewer`, {
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -338,7 +333,7 @@ export async function fetchDocumentBill(
   documentId: string,
 ): Promise<DocumentBillResponse> {
   const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill`, {
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -356,7 +351,7 @@ export async function fetchDocumentComparison(
   let res: Response;
   try {
     res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill/comparison`, {
-      headers: { "X-Organization-Id": orgId },
+      headers: tenantHeaders(orgId),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -390,7 +385,7 @@ export async function postMaterializeAnomalyComparisons(
   }
   const res = await fetch(`${apiBase}/api/v1/anomalies/materialize-comparisons?${params}`, {
     method: "POST",
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -421,7 +416,7 @@ export async function fetchAnomaliesList(
   params.set("sort", opts?.sort ?? "created_at");
   params.set("order", opts?.order ?? "desc");
   const res = await fetch(`${apiBase}/api/v1/anomalies?${params}`, {
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -433,7 +428,7 @@ export async function fetchAnomaliesList(
 /** Single anomaly + §4 explainability (detail drawer). */
 export async function fetchAnomaly(apiBase: string, orgId: string, anomalyId: string): Promise<AnomalyResponse> {
   const res = await fetch(`${apiBase}/api/v1/anomalies/${anomalyId}`, {
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -451,7 +446,7 @@ export async function postAnomalyReview(
 ): Promise<AnomalyResponse> {
   const res = await fetch(`${apiBase}/api/v1/anomalies/${anomalyId}/review`, {
     method: "POST",
-    headers: orgHeaders(orgId),
+    headers: tenantJsonHeaders(orgId),
     body: JSON.stringify({ to_status: body.to_status, note: body.note ?? null }),
   });
   if (!res.ok) {
@@ -468,7 +463,7 @@ export async function fetchAnomalyReviewEvents(
   anomalyId: string,
 ): Promise<AnomalyReviewEventResponse[]> {
   const res = await fetch(`${apiBase}/api/v1/anomalies/${anomalyId}/review-events`, {
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -486,7 +481,7 @@ export async function fetchDocumentPriorBills(
 ): Promise<DocumentPriorBillsResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill/prior-bills?${params}`, {
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -504,7 +499,7 @@ export async function patchDocumentSite(
 ): Promise<PatchDocumentSiteResponse> {
   const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/site`, {
     method: "PATCH",
-    headers: orgHeaders(orgId),
+    headers: tenantJsonHeaders(orgId),
     body: JSON.stringify({ site_id: siteId }),
   });
   if (!res.ok) {
@@ -522,7 +517,7 @@ export async function deleteDocument(
 ): Promise<{ document_id: string; deleted_at: string }> {
   const res = await fetch(`${apiBase}/api/v1/documents/${documentId}`, {
     method: "DELETE",
-    headers: orgHeaders(orgId),
+    headers: tenantJsonHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -539,7 +534,7 @@ export async function reprocessDocument(
 ): Promise<ReprocessDocumentResponse> {
   const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/reprocess`, {
     method: "POST",
-    headers: { "X-Organization-Id": orgId },
+    headers: tenantHeaders(orgId),
   });
   if (!res.ok) {
     const body = await res.text();

@@ -13,6 +13,13 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { LoginPage } from "./LoginPage";
+import {
+  clearSession,
+  getStoredUser,
+  isPlatformAdmin,
+  type AuthUser,
+} from "./lib/auth";
 import {
   createOrganization,
   fetchOrganizationsList,
@@ -827,6 +834,7 @@ export function App() {
   const [view, setView] = useState<AppView>("upload");
   const [apiBase, setApiBase] = useState(() => (envApi && envApi.length > 0 ? envApi : defaultApiBase));
   const [orgId, setOrgId] = useState(() => envOrg ?? "");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => getStoredUser());
   /** Default site for new uploads (per org, stored in localStorage). */
   const [selectedSiteId, setSelectedSiteId] = useState("");
   const [siteRows, setSiteRows] = useState<SiteResponse[]>([]);
@@ -905,12 +913,20 @@ export function App() {
 
   const phaseAllowsSubmit = phase === "idle" || phase === "done" || phase === "error";
 
+  const effectiveOrgId = useMemo(() => orgId.trim(), [orgId]);
+  const platformAdmin = isPlatformAdmin(authUser);
+  /** Org owners (members) and platform admins may create sites / delete docs in the active org. */
+  const canManageActiveOrg = Boolean(authUser && effectiveOrgId && isUuid(effectiveOrgId));
+
   const submitBlockedReason = useMemo(() => {
     if (!apiBase.trim()) {
       return "Set API base URL.";
     }
-    if (!orgId.trim()) {
-      return "Paste your Organization ID (UUID) under Connection — required by the API.";
+    if (!authUser) {
+      return "Sign in first.";
+    }
+    if (!effectiveOrgId || !isUuid(effectiveOrgId)) {
+      return "Choose an organization under Connection.";
     }
     if (!file) {
       return "Choose a file.";
@@ -941,7 +957,7 @@ export function App() {
   }, []);
 
   const loadSitesList = useCallback(async () => {
-    if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+    if (!apiBase.trim() || !effectiveOrgId || !isUuid(effectiveOrgId)) {
       setSiteRows([]);
       setSiteListError(null);
       return;
@@ -949,16 +965,16 @@ export function App() {
     setSiteListError(null);
     setSiteListLoading(true);
     try {
-      const rows = await fetchSitesList(apiBase.trim(), orgId.trim());
+      const rows = await fetchSitesList(apiBase.trim(), effectiveOrgId);
       setSiteRows(rows);
-      const stored = loadStoredSiteId(orgId.trim());
+      const stored = loadStoredSiteId(effectiveOrgId);
       if (stored && rows.some((s) => s.id === stored)) {
         setSelectedSiteId(stored);
       } else if (selectedSiteId && rows.some((s) => s.id === selectedSiteId)) {
         /* keep current selection */
       } else if (rows.length === 1) {
         setSelectedSiteId(rows[0].id);
-        storeSiteIdForOrg(orgId.trim(), rows[0].id);
+        storeSiteIdForOrg(effectiveOrgId, rows[0].id);
       }
     } catch (e) {
       setSiteListError(e instanceof Error ? e.message : String(e));
@@ -966,14 +982,14 @@ export function App() {
     } finally {
       setSiteListLoading(false);
     }
-  }, [apiBase, orgId]);
+  }, [apiBase, effectiveOrgId]);
 
   useEffect(() => {
     void loadSitesList();
   }, [loadSitesList]);
 
   const handleCreateSite = useCallback(async () => {
-    if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+    if (!apiBase.trim() || !effectiveOrgId || !isUuid(effectiveOrgId)) {
       setSiteCreateMessage("Set a valid Organization ID first.");
       return;
     }
@@ -985,10 +1001,10 @@ export function App() {
     setSiteCreateBusy(true);
     setSiteCreateMessage(null);
     try {
-      const created = await createSite(apiBase.trim(), orgId.trim(), name);
+      const created = await createSite(apiBase.trim(), effectiveOrgId, name);
       setSiteCreateMessage(`Site ready: ${created.name}`);
       setSelectedSiteId(created.id);
-      storeSiteIdForOrg(orgId.trim(), created.id);
+      storeSiteIdForOrg(effectiveOrgId, created.id);
       await loadSitesList();
     } catch (e) {
       setSiteCreateMessage(e instanceof Error ? e.message : String(e));
@@ -1009,7 +1025,7 @@ export function App() {
 
   /** Load presigned viewer payload whenever the selected id or org connection changes. */
   useEffect(() => {
-    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       setDocumentViewer(null);
       setViewerError(null);
       setViewerLoading(false);
@@ -1023,7 +1039,7 @@ export function App() {
       setViewerLoading(true);
     }
     setViewerError(null);
-    void fetchDocumentViewer(apiBase.trim(), orgId.trim(), selectedDocId)
+    void fetchDocumentViewer(apiBase.trim(), effectiveOrgId, selectedDocId)
       .then((v) => {
         if (!cancelled) {
           setDocumentViewer(v);
@@ -1047,7 +1063,7 @@ export function App() {
 
   /** Load normalized bill (2d) in parallel with the viewer when a document is selected. */
   useEffect(() => {
-    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       setDocumentBill(null);
       setBillError(null);
       setBillLoading(false);
@@ -1060,7 +1076,7 @@ export function App() {
       setBillLoading(true);
     }
     setBillError(null);
-    void fetchDocumentBill(apiBase.trim(), orgId.trim(), selectedDocId)
+    void fetchDocumentBill(apiBase.trim(), effectiveOrgId, selectedDocId)
       .then((res) => {
         if (!cancelled) {
           setDocumentBill(res.bill);
@@ -1089,7 +1105,7 @@ export function App() {
 
   /** Load prior bills when current bill has a site (§3a). */
   useEffect(() => {
-    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       setPriorBills(undefined);
       return;
     }
@@ -1102,7 +1118,7 @@ export function App() {
     let cancelled = false;
     setPriorBillsLoading(true);
     setPriorBillsError(null);
-    void fetchDocumentPriorBills(apiBase.trim(), orgId.trim(), selectedDocId)
+    void fetchDocumentPriorBills(apiBase.trim(), effectiveOrgId, selectedDocId)
       .then((res: DocumentPriorBillsResponse) => {
         if (!cancelled) {
           setPriorBills(res.prior_bills);
@@ -1134,7 +1150,7 @@ export function App() {
 
   /** Run §3b comparison when bill + site are available (same gate as prior bills). */
   useEffect(() => {
-    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       setComparison(undefined);
       return;
     }
@@ -1147,7 +1163,7 @@ export function App() {
     let cancelled = false;
     setComparisonLoading(true);
     setComparisonError(null);
-    void fetchDocumentComparison(apiBase.trim(), orgId.trim(), selectedDocId)
+    void fetchDocumentComparison(apiBase.trim(), effectiveOrgId, selectedDocId)
       .then((res) => {
         if (!cancelled) {
           setComparison(res);
@@ -1178,18 +1194,18 @@ export function App() {
   ]);
 
   const handleApplySiteToDocument = useCallback(async () => {
-    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       return;
     }
     setAssignSiteBusy(true);
     setAssignSiteError(null);
     try {
       const siteId = assignSiteDraft.trim() || null;
-      await patchDocumentSite(apiBase.trim(), orgId.trim(), selectedDocId, siteId);
+      await patchDocumentSite(apiBase.trim(), effectiveOrgId, selectedDocId, siteId);
       setViewerReloadNonce((n) => n + 1);
       if (siteId) {
         setSelectedSiteId(siteId);
-        storeSiteIdForOrg(orgId.trim(), siteId);
+        storeSiteIdForOrg(effectiveOrgId, siteId);
       }
     } catch (e) {
       setAssignSiteError(e instanceof Error ? e.message : String(e));
@@ -1211,7 +1227,7 @@ export function App() {
   }, [pipelineHold, documentViewer?.processing_status, viewerLoading, billLoading]);
 
   const runUpload = useCallback(async () => {
-    if (!file || !orgId.trim()) {
+    if (!file || !effectiveOrgId) {
       setPhase("error");
       setMessage("Choose a file and set Organization ID.");
       return;
@@ -1224,7 +1240,7 @@ export function App() {
       setMessage("Requesting presigned upload…");
       const presign = await presignUpload(
         apiBase.trim(),
-        orgId.trim(),
+        effectiveOrgId,
         file,
         selectedSiteId.trim() || null,
       );
@@ -1237,7 +1253,7 @@ export function App() {
 
       setPhase("completing");
       setMessage("Finalizing document (server-side hash)…");
-      const done = await completeUpload(apiBase.trim(), orgId.trim(), presign.document_id);
+      const done = await completeUpload(apiBase.trim(), effectiveOrgId, presign.document_id);
       setResult(done);
       setPhase("done");
       setMessage("Upload complete.");
@@ -1248,14 +1264,14 @@ export function App() {
   }, [apiBase, orgId, file, closeViewer, selectedSiteId]);
 
   const loadDocumentList = useCallback(async () => {
-    if (!apiBase.trim() || !orgId.trim()) {
+    if (!apiBase.trim() || !effectiveOrgId) {
       setDocListError("Set API base URL and Organization ID first.");
       return;
     }
     setDocListError(null);
     setDocListLoading(true);
     try {
-      const rows = await fetchDocumentsList(apiBase.trim(), orgId.trim(), 200);
+      const rows = await fetchDocumentsList(apiBase.trim(), effectiveOrgId, 200);
       setDocRows(rows);
     } catch (e) {
       setDocListError(e instanceof Error ? e.message : String(e));
@@ -1263,11 +1279,11 @@ export function App() {
     } finally {
       setDocListLoading(false);
     }
-  }, [apiBase, orgId]);
+  }, [apiBase, effectiveOrgId]);
 
   const loadAnomalyList = useCallback(
     async (opts?: { materializeFirst?: boolean }) => {
-      if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+      if (!apiBase.trim() || !effectiveOrgId || !isUuid(effectiveOrgId)) {
         setAnomalyRows([]);
         setAnomalyListError(null);
         return;
@@ -1276,12 +1292,12 @@ export function App() {
       setAnomalyListLoading(true);
       try {
         if (opts?.materializeFirst) {
-          await postMaterializeAnomalyComparisons(apiBase.trim(), orgId.trim(), {
+          await postMaterializeAnomalyComparisons(apiBase.trim(), effectiveOrgId, {
             siteId: selectedSiteId || undefined,
             limit: 500,
           });
         }
-        const rows = await fetchAnomaliesList(apiBase.trim(), orgId.trim(), {
+        const rows = await fetchAnomaliesList(apiBase.trim(), effectiveOrgId, {
           siteId: selectedSiteId || undefined,
           reviewStatus: anomalyReviewFilter ? (anomalyReviewFilter as AnomalyReviewStatus) : undefined,
           limit: 500,
@@ -1317,7 +1333,7 @@ export function App() {
   }, [anomalyReviewBusyId]);
 
   const handleConfirmAnomalyReview = useCallback(async () => {
-    if (!pendingReview || !apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+    if (!pendingReview || !apiBase.trim() || !effectiveOrgId || !isUuid(effectiveOrgId)) {
       return;
     }
     const { anomalyId, toStatus } = pendingReview;
@@ -1325,7 +1341,7 @@ export function App() {
     setAnomalyListError(null);
     try {
       const note = reviewNoteDraft.trim() || null;
-      await postAnomalyReview(apiBase.trim(), orgId.trim(), anomalyId, {
+      await postAnomalyReview(apiBase.trim(), effectiveOrgId, anomalyId, {
         to_status: toStatus,
         note,
       });
@@ -1340,7 +1356,7 @@ export function App() {
       if (reviewEventsExpandedId === anomalyId) {
         setReviewEventsLoadingId(anomalyId);
         try {
-          const events = await fetchAnomalyReviewEvents(apiBase.trim(), orgId.trim(), anomalyId);
+          const events = await fetchAnomalyReviewEvents(apiBase.trim(), effectiveOrgId, anomalyId);
           setReviewEventsByAnomalyId((prev) => ({ ...prev, [anomalyId]: events }));
         } catch (err) {
           setAnomalyListError(err instanceof Error ? err.message : String(err));
@@ -1370,7 +1386,7 @@ export function App() {
         setReviewEventsExpandedId(null);
         return;
       }
-      if (!apiBase.trim() || !orgId.trim() || !isUuid(orgId)) {
+      if (!apiBase.trim() || !effectiveOrgId || !isUuid(effectiveOrgId)) {
         return;
       }
       setReviewEventsExpandedId(anomalyId);
@@ -1380,7 +1396,7 @@ export function App() {
       setReviewEventsLoadingId(anomalyId);
       setAnomalyListError(null);
       try {
-        const events = await fetchAnomalyReviewEvents(apiBase.trim(), orgId.trim(), anomalyId);
+        const events = await fetchAnomalyReviewEvents(apiBase.trim(), effectiveOrgId, anomalyId);
         setReviewEventsByAnomalyId((prev) => ({ ...prev, [anomalyId]: events }));
       } catch (err) {
         setAnomalyListError(err instanceof Error ? err.message : String(err));
@@ -1411,7 +1427,7 @@ export function App() {
 
   /** Poll viewer + bill while pipeline may still be running (no full-page reload). */
   useEffect(() => {
-    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       return;
     }
     const status = documentViewer?.processing_status;
@@ -1439,13 +1455,24 @@ export function App() {
     try {
       const rows = await fetchOrganizationsList(apiBase.trim(), 200);
       setOrgRows(rows);
+      if (rows.length === 1) {
+        setOrgId(rows[0].id);
+      } else if (orgId && !rows.some((r) => r.id === orgId) && rows.length > 0) {
+        setOrgId(rows[0].id);
+      }
     } catch (e) {
       setOrgListError(e instanceof Error ? e.message : String(e));
       setOrgRows([]);
     } finally {
       setOrgListLoading(false);
     }
-  }, [apiBase]);
+  }, [apiBase, orgId]);
+
+  useEffect(() => {
+    if (authUser) {
+      void loadOrganizationsList();
+    }
+  }, [authUser, loadOrganizationsList]);
 
   const randomizeOrgForm = useCallback(() => {
     const tok = randomToken(10);
@@ -1504,14 +1531,14 @@ export function App() {
   );
 
   const handleReprocessSelected = useCallback(async () => {
-    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       return;
     }
     setReprocessBusy(true);
     setReprocessError(null);
     setPipelineHold(true);
     try {
-      await reprocessDocument(apiBase.trim(), orgId.trim(), selectedDocId);
+      await reprocessDocument(apiBase.trim(), effectiveOrgId, selectedDocId);
       setViewerReloadNonce((n) => n + 1);
       if (view === "documents") {
         void loadDocumentList();
@@ -1524,7 +1551,7 @@ export function App() {
   }, [selectedDocId, orgId, apiBase, view, loadDocumentList]);
 
   const handleDeleteSelected = useCallback(async () => {
-    if (!selectedDocId || !orgId.trim() || !apiBase.trim()) {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       return;
     }
     const ok = window.confirm(
@@ -1536,7 +1563,7 @@ export function App() {
     setDeleteBusy(true);
     setDeleteError(null);
     try {
-      await deleteDocument(apiBase.trim(), orgId.trim(), selectedDocId);
+      await deleteDocument(apiBase.trim(), effectiveOrgId, selectedDocId);
       closeViewer();
       if (view === "documents") {
         void loadDocumentList();
@@ -1598,6 +1625,18 @@ export function App() {
     comparisonError,
   };
 
+  if (!authUser) {
+    return (
+      <LoginPage
+        initialApiBase={apiBase}
+        onSignedIn={(user, base) => {
+          setAuthUser(user);
+          setApiBase(base);
+        }}
+      />
+    );
+  }
+
   return (
     <div className={`${pageClass}${pageWideWithViewer ? " page--viewer" : ""}`}>
       <header className="app-header">
@@ -1655,36 +1694,56 @@ export function App() {
               ? "Track processing, open the PDF and extracted bill, assign a site, and see insights next to prior months."
               : view === "anomalies"
                 ? "Saved comparison signals across your organization. Open a document from a row to review the bill context. Pick a site under Connection to narrow the list."
-                : "Create dev workspaces and copy organization IDs. Authentication is not wired to these routes yet."}
+                : "Create organizations you own (members) or manage all tenants (platform admin)."}
         </p>
       </header>
 
       <section className="card">
         <h2>Connection</h2>
-        <p className="card-subtitle">Point the app at your API and choose which organization you’re working in.</p>
-        <label className="field">
-          <span>API base URL</span>
-          <input
-            value={apiBase}
-            onChange={(e) => setApiBase(e.target.value)}
-            placeholder="http://127.0.0.1:8000"
-            autoComplete="off"
-          />
-        </label>
-        <label className="field">
-          <span>Organization ID (UUID)</span>
-          <input
-            value={orgId}
-            onChange={(e) => setOrgId(e.target.value)}
-            placeholder="from Postgres or register-document output"
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </label>
-        <p className="hint">
-          Set <code>VITE_API_BASE_URL</code> and <code>VITE_ORG_ID</code> in <code>frontend/.env</code> to prefill. Use the
-          Organizations tab to create tenants and copy UUIDs.
+        <p className="card-subtitle">
+          {platformAdmin
+            ? "Platform admin: choose any organization to work in."
+            : "Pick an organization you created to upload bills and view documents."}
         </p>
+        <div className="connection-auth-signed-in">
+          <p className="hint">
+            Signed in as <strong>{authUser.email}</strong>
+            {platformAdmin ? " (platform admin)" : " (member)"}
+          </p>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              clearSession();
+              setAuthUser(null);
+              setOrgId("");
+              setOrgRows([]);
+            }}
+          >
+            Sign out
+          </button>
+        </div>
+        <label className="field">
+          <span>Active organization</span>
+          <select
+            value={orgId}
+            disabled={orgListLoading || orgRows.length === 0}
+            onChange={(e) => setOrgId(e.target.value)}
+          >
+            <option value="">
+              {orgRows.length === 0 ? "— Create an organization first —" : "— Select organization —"}
+            </option>
+            {orgRows.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name} ({o.slug})
+              </option>
+            ))}
+          </select>
+        </label>
+        {orgListError ? <p className="error">{orgListError}</p> : null}
+        <button type="button" className="secondary" disabled={orgListLoading} onClick={() => void loadOrganizationsList()}>
+          {orgListLoading ? "Refreshing…" : "Refresh organizations"}
+        </button>
         <div className="connection-sites">
           <h3 className="connection-sites-title">Site (location)</h3>
           <p className="hint">
@@ -1696,12 +1755,12 @@ export function App() {
             <span>Site for uploads</span>
             <select
               value={selectedSiteId}
-              disabled={!isUuid(orgId) || siteListLoading || siteRows.length === 0}
+              disabled={!isUuid(effectiveOrgId) || siteListLoading || siteRows.length === 0}
               onChange={(e) => {
                 const v = e.target.value;
                 setSelectedSiteId(v);
-                if (isUuid(orgId)) {
-                  storeSiteIdForOrg(orgId.trim(), v);
+                if (isUuid(effectiveOrgId)) {
+                  storeSiteIdForOrg(effectiveOrgId, v);
                 }
               }}
             >
@@ -1722,13 +1781,13 @@ export function App() {
                 value={newSiteName}
                 onChange={(e) => setNewSiteName(e.target.value)}
                 placeholder="Seattle"
-                disabled={!isUuid(orgId)}
+                disabled={!isUuid(effectiveOrgId)}
               />
             </label>
             <button
               type="button"
               className="secondary"
-              disabled={!isUuid(orgId) || siteCreateBusy}
+              disabled={!canManageActiveOrg || siteCreateBusy}
               onClick={() => void handleCreateSite()}
             >
               {siteCreateBusy ? "Creating…" : "Create site"}
@@ -1736,7 +1795,7 @@ export function App() {
             <button
               type="button"
               className="secondary"
-              disabled={!isUuid(orgId) || siteListLoading}
+              disabled={!isUuid(effectiveOrgId) || siteListLoading}
               onClick={() => void loadSitesList()}
             >
               Refresh sites

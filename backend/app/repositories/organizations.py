@@ -1,4 +1,4 @@
-"""Organization lookups, list/create for HTTP (dev), and idempotent ``ensure`` for CLI."""
+"""Organization lookups, list/create for HTTP, and access-scoped listing."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.organization import Organization
+from app.models.user import User
+from app.services.auth.access import is_platform_admin
 
-# URL-safe tenant key (lowercase); Postgres unique index on ``slug``.
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
@@ -24,40 +25,67 @@ class OrganizationSlugConflictError(Exception):
 
 
 def get_organization_by_id(session: Session, organization_id: uuid.UUID) -> Optional[Organization]:
-    """Primary key fetch (used by ``X-Organization-Id`` dependency)."""
+    """Primary key fetch."""
     return session.scalar(select(Organization).where(Organization.id == organization_id))
 
 
 def get_organization_by_slug(session: Session, slug: str) -> Optional[Organization]:
-    """Stable slug lookup (e.g. ``dev`` for local seeds); ``slug`` is matched case-insensitively."""
+    """Stable slug lookup (e.g. ``dev`` for local seeds)."""
     key = slug.strip().lower()
     return session.scalar(select(Organization).where(Organization.slug == key))
 
 
-def ensure_organization(session: Session, *, name: str, slug: str) -> Organization:
+def ensure_organization(
+    session: Session,
+    *,
+    name: str,
+    slug: str,
+    created_by_user_id: Optional[uuid.UUID] = None,
+) -> Organization:
     """Return existing org by slug or insert a new one (caller commits)."""
     org = get_organization_by_slug(session, slug.strip().lower())
     if org:
         return org
-    org = Organization(id=uuid.uuid4(), name=name.strip(), slug=slug.strip().lower())
+    org = Organization(
+        id=uuid.uuid4(),
+        name=name.strip(),
+        slug=slug.strip().lower(),
+        created_by_user_id=created_by_user_id,
+    )
     session.add(org)
     session.flush()
     return org
 
 
 def list_organizations(session: Session, *, limit: int = 500) -> list[Organization]:
-    """All tenants (newest first); used by the dev admin list endpoint — no org filter."""
+    """All tenants (newest first); platform admins only."""
     rows = session.scalars(
         select(Organization).order_by(Organization.created_at.desc()).limit(limit)
     ).all()
     return list(rows)
 
 
-def create_organization(session: Session, *, name: str, slug: str) -> Organization:
-    """Insert a new organization; raises ``OrganizationSlugConflictError`` if ``slug`` is taken.
+def list_organizations_for_user(session: Session, *, user: User, limit: int = 500) -> list[Organization]:
+    """Admins: all orgs. Members: only rows with ``created_by_user_id`` = this user."""
+    if is_platform_admin(user):
+        return list_organizations(session, limit=limit)
+    rows = session.scalars(
+        select(Organization)
+        .where(Organization.created_by_user_id == user.id)
+        .order_by(Organization.created_at.desc())
+        .limit(limit)
+    ).all()
+    return list(rows)
 
-    Normalizes ``slug`` to lowercase for storage and lookup consistency with ``ensure_organization``.
-    """
+
+def create_organization(
+    session: Session,
+    *,
+    name: str,
+    slug: str,
+    created_by_user_id: Optional[uuid.UUID] = None,
+) -> Organization:
+    """Insert a new organization; raises ``OrganizationSlugConflictError`` if ``slug`` is taken."""
     normalized = slug.strip().lower()
     if not normalized or not _SLUG_PATTERN.fullmatch(normalized):
         raise ValueError(
@@ -65,7 +93,12 @@ def create_organization(session: Session, *, name: str, slug: str) -> Organizati
         )
     if get_organization_by_slug(session, normalized) is not None:
         raise OrganizationSlugConflictError(normalized)
-    org = Organization(id=uuid.uuid4(), name=name.strip(), slug=normalized)
+    org = Organization(
+        id=uuid.uuid4(),
+        name=name.strip(),
+        slug=normalized,
+        created_by_user_id=created_by_user_id,
+    )
     session.add(org)
     session.flush()
     return org

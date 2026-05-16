@@ -82,6 +82,13 @@ else
   echo "WARNING: seed-dev-org failed. Fix DB/migrations, then from backend/ with your venv active: python -m alembic upgrade head && python -m app.scripts.seed_dev_org (see .cursor/rules/local-dev-stack.mdc)"
 fi
 
+echo "==> seed-dev-user (JWT admin for Connection sign-in)"
+if (cd "$ROOT/backend" && "${PY}" -m app.scripts.seed_dev_user); then
+  :
+else
+  echo "WARNING: seed-dev-user failed. Run: cd backend && python -m alembic upgrade head && python -m app.scripts.seed_dev_user"
+fi
+
 echo ""
 
 if [[ "${SKIP_DOCUMENT_WORKER:-}" == "1" ]]; then

@@ -20,7 +20,7 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-16 (§5e notes + §3e prior-bill tuning)
+## Implementation status (repository) — 2026-05-15 (P1/P3 auth + §3e scale)
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
@@ -30,7 +30,7 @@ Just:
 - **Document ingestion:** presigned upload + CLI; **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs. **Anomalies** tab lists persisted comparison signals (**§3d**).
 - **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), falls back to **Tesseract OCR** for scan-only PDFs / image MIME types, optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**).
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
-- **Auth:** development-style **organization UUID header** only.
+- **Auth (P1/P3):** JWT login (`POST /api/v1/auth/login`, `GET /auth/me`); org-scoped bearer on document/anomaly/site routes; **admin** vs **member** RBAC (admin: delete document, create site, batch materialize; member: upload/review/read). Dev **`X-Organization-Id`** still accepted when `AUTH_ALLOW_DEV_ORG_HEADER=true`. Seed users via **`seed-dev-user`**.
 - **§3a prior bills:** `list_bills_for_site` / `get_prior_bills_for_bill` + **`GET /api/v1/documents/{id}/bill/prior-bills`** (same-org, same-`site_id`; period ordering in eng **3a**).
 - **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; **`GET /api/v1/anomalies`** returns **template explanations** + **grounding tiers** from saved evidence; **`GET …/anomalies/{id}`** for detail; **`POST /api/v1/anomalies/materialize-comparisons`** runs the same comparison for every finished document in the org (optional site filter) so the **Anomalies** tab **Refresh** can populate the list **without opening each document**.
 - **§5 review workflow:** Alembic **`009_anomaly_review`** adds **`review_status`** + audit **`anomaly_review_events`**; **`POST /api/v1/anomalies/{id}/review`** transitions state; inbox **Review status** filter and per-row **Actions** (approve / dismiss / flag / reopen) with optional **§5e notes** (modal + **History** audit list).
@@ -39,12 +39,13 @@ Just:
 
 ### Still to build for Phase 1 MVP
 
-**Remaining comparison breadth** (**§3c** is scoped as future work — see below), production auth, and hardening on **real** structured bills across very long histories (template §4 is shipped; optional LLM wording polish can follow).
+**Remaining comparison breadth** (**§3c** is scoped as future work — see below) and hardening on **real** structured bills (template §4 is shipped; optional LLM wording polish can follow).
 
 ### Recommended next focus (product ↔ eng)
 
 - **§3c** — site-to-site comparables when pilots need cross-location views.
-- **Production auth / RBAC** — replace dev **`X-Organization-Id`** when review workflow needs real users.
+- **P2** — worker retries + upload idempotency hardening.
+- **Real-bill pilot** — `EXTRACTION_LLM_API_KEY`, `site_id` on upload UI (**1-OPT**).
 
 ### Possible future work (comparison breadth)
 
@@ -64,7 +65,7 @@ Pick these up when a pilot or ops need pushes them; they are intentionally out o
 | **§2e internal raw vs normalized viewer** | Support/debug tool beyond the current debug JSON panel. |
 | **§4b LLM “polish” on explanations** | Ship **§4** with templates first; LLM optional behind a flag. |
 | **Inbound email ingestion (eng 1e–1g)** | Presigned upload + CLI is enough for Phase 1. |
-| **Production auth / RBAC (eng P1–P3)** | Dev `X-Organization-Id` until review workflow needs real users. |
+| **P2 retries / idempotency** | Track in eng roadmap; not started. |
 
 ---
 

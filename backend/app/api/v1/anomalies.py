@@ -8,10 +8,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_organization
+from app.api.deps import AuthContext, require_admin, require_auth_context
 from app.db.session import get_db
 from app.models.anomaly import Anomaly
-from app.models.organization import Organization
 from app.repositories.anomalies import (
     get_anomaly_for_organization,
     latest_review_notes_for_anomaly_ids,
@@ -36,7 +35,7 @@ router = APIRouter(prefix="/anomalies", tags=["anomalies"])
 @router.get("", response_model=list[AnomalyResponse])
 def list_anomalies(
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
     site_id: Optional[UUID] = Query(None, description="Optional ``sites.id`` filter (same-org)."),
     review_status: Optional[str] = Query(
         None,
@@ -52,7 +51,7 @@ def list_anomalies(
     """Return persisted §3 comparison signals with §4 narratives and §5 review status."""
     rows = list_anomalies_for_organization(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         site_id=site_id,
         review_status=review_status,
         sort=sort,
@@ -61,7 +60,7 @@ def list_anomalies(
     )
     notes = latest_review_notes_for_anomaly_ids(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         anomaly_ids=[row.id for row in rows],
     )
     return [_to_response(row, latest_review_note=notes.get(row.id)) for row in rows]
@@ -70,7 +69,7 @@ def list_anomalies(
 @router.post("/materialize-comparisons", response_model=MaterializeComparisonsResponse)
 def post_materialize_comparisons(
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_admin),
     site_id: Optional[UUID] = Query(
         None,
         description="Optional ``sites.id`` scope (match Anomalies list filter / Connection picker).",
@@ -88,7 +87,7 @@ def post_materialize_comparisons(
     """
     ok, failed = materialize_comparisons_for_organization(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         site_id=site_id,
         limit=limit,
     )
@@ -104,10 +103,12 @@ def post_anomaly_review(
     anomaly_id: UUID,
     body: ReviewTransitionRequest,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> AnomalyResponse:
     """§5a: transition workflow state and append an audit row (§5b)."""
-    row = get_anomaly_for_organization(db, organization_id=org.id, anomaly_id=anomaly_id)
+    row = get_anomaly_for_organization(
+        db, organization_id=ctx.organization.id, anomaly_id=anomaly_id
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="Anomaly not found")
     try:
@@ -116,14 +117,14 @@ def post_anomaly_review(
             anomaly=row,
             to_status=body.to_status,
             note=body.note,
-            actor_user_id=None,
+            actor_user_id=ctx.user.id if ctx.user is not None else None,
         )
     except ReviewTransitionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.refresh(row)
     notes = latest_review_notes_for_anomaly_ids(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         anomaly_ids=[row.id],
     )
     return _to_response(row, latest_review_note=notes.get(row.id))
@@ -133,15 +134,17 @@ def post_anomaly_review(
 def get_anomaly_review_events(
     anomaly_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> list[AnomalyReviewEventResponse]:
     """§5b: append-only history for one anomaly."""
-    parent = get_anomaly_for_organization(db, organization_id=org.id, anomaly_id=anomaly_id)
+    parent = get_anomaly_for_organization(
+        db, organization_id=ctx.organization.id, anomaly_id=anomaly_id
+    )
     if parent is None:
         raise HTTPException(status_code=404, detail="Anomaly not found")
     events = list_review_events_for_anomaly(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         anomaly_id=anomaly_id,
     )
     return [
@@ -162,15 +165,17 @@ def get_anomaly_review_events(
 def get_anomaly(
     anomaly_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> AnomalyResponse:
     """Single anomaly read model (§4d + §5 status)."""
-    row = get_anomaly_for_organization(db, organization_id=org.id, anomaly_id=anomaly_id)
+    row = get_anomaly_for_organization(
+        db, organization_id=ctx.organization.id, anomaly_id=anomaly_id
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="Anomaly not found")
     notes = latest_review_notes_for_anomaly_ids(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         anomaly_ids=[row.id],
     )
     return _to_response(row, latest_review_note=notes.get(row.id))

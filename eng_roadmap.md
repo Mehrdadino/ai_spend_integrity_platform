@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-16 (§5e review notes UI + §3e prior-bill index / SQL priors)  
+**Last updated:** 2026-05-15 (P1/P3 JWT auth + RBAC; §3e keyset site scans)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -30,7 +30,9 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **3a** | Prior-bill queries: `app/services/comparison/period.py`, `app/repositories/bills.py` (`list_bills_for_site`, `get_prior_bills_for_bill`), **`GET …/bill/prior-bills`**. |
 | **3b** | Rule pack v1: `rule_pack_v1.py` (MoM total, new fee lines, header mismatch); **`GET …/bill/comparison`**; UI **Comparison insights**. |
 | **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`** (+ **`GET …/anomalies/{id}`** §4d); replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab. New anomalies default **`review_status=open`** (**009**). |
-| **3e** | **Shipped:** RQ backfill after worker upsert + **PATCH …/site**; **010** index ``ix_bills_org_site_period_sort``; SQL prior fetch (no full-site load for MoM); site scan default **500** (max **2000** via ``limits.py``); backfill lists bills without line items. |
+| **3e** | **Shipped:** RQ backfill after worker upsert + **PATCH …/site**; **010** index ``ix_bills_org_site_period_sort``; SQL prior fetch; backfill targets via ``list_document_ids_newest_through_anchor`` (no 500/2000 prefix cap); site-wide refresh uses keyset pages (``iter_document_ids_for_site_keyset``, configurable ``SITE_BILL_REFRESH_MAX_BILLS``). |
+| **P1** | **Shipped:** ``POST /api/v1/auth/login``, ``GET /auth/me``; JWT bearer in ``require_auth_context``; optional dev ``X-Organization-Id``; migration **011_user_auth_rbac**. |
+| **P3** | **Shipped:** ``users.role`` admin/member; ``require_admin`` on document delete, site create, ``POST …/materialize-comparisons``; review audit ``actor_user_id`` from JWT. |
 | **4b–4d** | Template copy + confidence from ``anomalies.evidence`` — ``build_explainability_v1`` (`app/services/explain/anomaly_v1.py`); nested ``explainability`` on anomaly JSON; UI **Grounding** + **Explanation** columns. |
 | **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete** button (hidden from list). |
 | **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
@@ -38,7 +40,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 ### Not started (still Phase 1 product scope)
 
 - **§3c:** site-to-site comparables (see **Possible future work** below).
-- **Cross-cutting P1–P5:** real auth, RBAC, observability, E2E smoke.
+- **Cross-cutting P2, P4–P5:** retries/idempotency, observability, E2E smoke.
 
 ### Deferred / optional (see also `product_roadmap.md`)
 
@@ -50,7 +52,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **2e** | Internal raw vs normalized viewer (admin). |
 | **4b-OPT** | LLM polish on explanation templates. |
 | **1e–1g** | Inbound email ingestion (removed from repo; revisit if product wants it). |
-| **P1–P3** | Auth, idempotency hardening, RBAC (track parallel to §5). |
+| **P2** | Worker retries + idempotency hardening. |
 
 ### Possible future work (breadth / scale)
 
@@ -63,8 +65,8 @@ These are **not** in the current sprint; **§3c** stays out of repo until produc
 ### Suggested “resume here” order
 
 1. **§3c** — site-to-site comparables when a pilot needs cross-location views.  
-2. **Cross-cutting P1–P5** — real auth, RBAC, observability, E2E smoke.  
-3. **§3e at extreme scale** — keyset/cursor site scans beyond **2000** bills per site (if needed).
+2. **P2 + P4–P5** — retries/idempotency, observability, E2E smoke.  
+3. **1-OPT** — ``site_id`` on upload UI; real-bill extraction pilot.
 
 ---
 
@@ -160,9 +162,9 @@ These are **not** a separate product pillar but parallel tracks that attach to t
 
 | Step | What ships |
 |------|------------|
-| **P1 — Auth + tenant context** | Org-scoped JWT/session; middleware injects `organization_id` for all handlers. |
+| **P1 — Auth + tenant context** | **Shipped:** JWT bearer + ``require_auth_context``; ``seed-dev-user``; dev header optional. |
 | **P2 — Retries + idempotency** | Worker retries with backoff; idempotent document hash / job keys. |
-| **P3 — Minimal RBAC** | e.g. org admin vs member; enforced on review transitions if needed. |
+| **P3 — Minimal RBAC** | **Shipped:** ``admin`` / ``member``; admin-only delete/site-create/materialize; review ``actor_user_id``. |
 | **P4 — Observability** | Structured logs, correlation id per `document_id`, basic metrics on job success/fail. |
 | **P5 — E2E smoke** | Scripted path: upload → normalized bill → anomaly → explain → review on a fixed PDF set. |
 

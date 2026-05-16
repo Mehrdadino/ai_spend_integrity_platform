@@ -1,6 +1,6 @@
 """Document HTTP API: list (1h), presigned upload, finalize, read-back, enqueue (1b–1d).
 
-All routes require ``X-Organization-Id`` matching an organization UUID.
+Org-scoped routes require JWT bearer (P1) or dev ``X-Organization-Id`` when enabled.
 
 Static paths (``presigned-upload``) and sub-resources (``read-url``, ``viewer``, ``bill``,
 ``bill/prior-bills``, ``bill/comparison``, ``reprocess``) are registered before bare ``GET /{document_id}`` so path segments are not
@@ -15,11 +15,10 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_organization
+from app.api.deps import AuthContext, require_admin, require_auth_context
 from app.config import get_settings
 from app.db.session import get_db
 from app.models.document import Document
-from app.models.organization import Organization
 from app.repositories.bills import get_bill_for_org_document, get_prior_bills_for_org_document
 from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
 from app.repositories.anomalies import review_status_by_document_ids
@@ -94,14 +93,14 @@ def _document_detail_response(db: Session, doc: Document) -> DocumentDetailRespo
 @router.get("", response_model=list[DocumentListItemResponse])
 def get_documents(
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
     limit: int = Query(100, ge=1, le=500, description="Max rows returned (newest first)"),
 ) -> list[DocumentListItemResponse]:
     """List documents for the tenant (step 1h): ingestion / pipeline status overview."""
-    rows = list_documents_for_organization(db, organization_id=org.id, limit=limit)
+    rows = list_documents_for_organization(db, organization_id=ctx.organization.id, limit=limit)
     review_by_doc = review_status_by_document_ids(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         document_ids=[doc.id for doc in rows],
     )
     return [
@@ -125,12 +124,12 @@ def get_documents(
 def post_presigned_upload(
     body: PresignedUploadRequest,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> PresignedUploadResponse:
     """Create a row in ``awaiting_object`` state and return a presigned PUT URL."""
     doc, upload_url, expires_in = create_presigned_upload(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         site_id=body.site_id,
         mime_type=body.mime_type,
         expected_byte_size=body.expected_byte_size,
@@ -152,10 +151,10 @@ def post_complete_upload(
     document_id: UUID,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> CompleteUploadResponse:
     """After the client PUTs bytes to storage, finalize hash and size (server-side read)."""
-    doc = complete_presigned_upload(db, organization_id=org.id, document_id=document_id)
+    doc = complete_presigned_upload(db, organization_id=ctx.organization.id, document_id=document_id)
     assert doc.sha256 is not None and doc.byte_size is not None
     # Runs after ``get_db`` commits so the worker sees the final ``queued`` row.
     background_tasks.add_task(enqueue_document_pipeline_safe, doc.id)
@@ -172,11 +171,11 @@ def post_complete_upload(
 def get_document_read_url(
     document_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> DocumentReadUrlResponse:
     """Presigned GET for the stored object; org-scoped; rejects unfinished uploads."""
     doc = get_document_for_organization(
-        db, document_id=document_id, organization_id=org.id
+        db, document_id=document_id, organization_id=ctx.organization.id
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -200,11 +199,11 @@ def get_document_read_url(
 def get_document_viewer(
     document_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> DocumentViewerResponse:
     """Single response for viewer UI: metadata + presigned file URL (same org scope)."""
     doc = get_document_for_organization(
-        db, document_id=document_id, organization_id=org.id
+        db, document_id=document_id, organization_id=ctx.organization.id
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -229,15 +228,15 @@ def get_document_viewer(
 def get_document_bill(
     document_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> DocumentBillResponse:
     """Return the normalized bill for this document, or ``bill: null`` if not materialized yet."""
     doc = get_document_for_organization(
-        db, document_id=document_id, organization_id=org.id
+        db, document_id=document_id, organization_id=ctx.organization.id
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    bill = get_bill_for_org_document(db, organization_id=org.id, document_id=document_id)
+    bill = get_bill_for_org_document(db, organization_id=ctx.organization.id, document_id=document_id)
     if bill is None:
         return DocumentBillResponse(document_id=document_id, bill=None)
     return DocumentBillResponse(
@@ -250,17 +249,17 @@ def get_document_bill(
 def get_document_bill_comparison(
     document_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> DocumentComparisonResponse:
     """Run §3b rule pack v1 (MoM total, new fees, header mismatch) vs immediate prior bill."""
     doc = get_document_for_organization(
-        db, document_id=document_id, organization_id=org.id
+        db, document_id=document_id, organization_id=ctx.organization.id
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return evaluate_document_comparison(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         document_id=document_id,
     )
 
@@ -269,18 +268,18 @@ def get_document_bill_comparison(
 def get_document_prior_bills(
     document_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
     limit: int = Query(10, ge=1, le=50, description="Max prior bills to return (same site)."),
 ) -> DocumentPriorBillsResponse:
     """Return older normalized bills for the same ``site_id`` (§3a); empty when no site or no history."""
     doc = get_document_for_organization(
-        db, document_id=document_id, organization_id=org.id
+        db, document_id=document_id, organization_id=ctx.organization.id
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     current, priors = get_prior_bills_for_org_document(
         db,
-        organization_id=org.id,
+        organization_id=ctx.organization.id,
         document_id=document_id,
         limit=limit,
     )
@@ -299,15 +298,15 @@ def patch_document_site(
     body: PatchDocumentSiteRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> PatchDocumentSiteResponse:
     """Assign a site to this document (and bill) for §3 historical comparison."""
-    bill_before = get_bill_for_org_document(db, organization_id=org.id, document_id=document_id)
+    bill_before = get_bill_for_org_document(db, organization_id=ctx.organization.id, document_id=document_id)
     old_site_id = bill_before.site_id if bill_before is not None else None
     try:
         doc = assign_site_to_document(
             db,
-            organization_id=org.id,
+            organization_id=ctx.organization.id,
             document_id=document_id,
             site_id=body.site_id,
         )
@@ -318,7 +317,7 @@ def patch_document_site(
     # §3e: priors change for this bill and sometimes for neighbors on old/new sites.
     background_tasks.add_task(enqueue_document_comparison_backfill_safe, doc.id)
     if old_site_id is not None and new_site_id != old_site_id:
-        background_tasks.add_task(enqueue_site_comparison_refresh_safe, org.id, old_site_id)
+        background_tasks.add_task(enqueue_site_comparison_refresh_safe, ctx.organization.id, old_site_id)
     return PatchDocumentSiteResponse(document_id=doc.id, site_id=doc.site_id)
 
 
@@ -326,11 +325,11 @@ def patch_document_site(
 def delete_document(
     document_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_admin),
 ) -> DeleteDocumentResponse:
-    """Soft-delete: set ``deleted_at``; row and S3 object remain until hard delete is implemented."""
+    """Soft-delete (org admin): set ``deleted_at``; S3 object remains until hard delete."""
     doc = soft_delete_document(
-        db, organization_id=org.id, document_id=document_id
+        db, organization_id=ctx.organization.id, document_id=document_id
     )
     if doc is None or doc.deleted_at is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -342,12 +341,12 @@ def post_reprocess_document(
     document_id: UUID,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> ReprocessDocumentResponse:
     """Reset pipeline to ``queued`` and enqueue the worker (``extracted`` / ``failed`` / ``received`` / ``queued`` / ``pending``)."""
     try:
         doc = reprocess_document_for_organization(
-            db, organization_id=org.id, document_id=document_id
+            db, organization_id=ctx.organization.id, document_id=document_id
         )
     except ReprocessDocumentBadRequest as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
@@ -365,11 +364,11 @@ def post_reprocess_document(
 def get_document(
     document_id: UUID,
     db: Session = Depends(get_db),
-    org: Organization = Depends(require_organization),
+    ctx: AuthContext = Depends(require_auth_context),
 ) -> DocumentDetailResponse:
     """Return one document scoped to the caller's org (for the upload UI detail link)."""
     doc = get_document_for_organization(
-        db, document_id=document_id, organization_id=org.id
+        db, document_id=document_id, organization_id=ctx.organization.id
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
