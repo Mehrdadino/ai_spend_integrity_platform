@@ -176,3 +176,12 @@ class DocumentListItemResponse(BaseModel):
         ),
     )
     created_at: datetime
+
+
+class DocumentBrowseResponse(BaseModel):
+    """Paginated document search for anomaly inbox / pickers (``GET /documents/browse``)."""
+
+    items: list[DocumentListItemResponse]
+    total: int = Field(..., ge=0)
+    offset: int = Field(..., ge=0)
+    limit: int = Field(..., ge=1)

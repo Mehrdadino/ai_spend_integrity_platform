@@ -13,6 +13,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { AnomalyDocumentFilter } from "./components/AnomalyDocumentFilter";
 import { LoginPage } from "./LoginPage";
 import {
   clearSession,
@@ -149,6 +150,71 @@ function explainConfidenceLabel(tier: string): string {
   }
 }
 
+/** Label for grouping anomalies by document (name or short id). */
+function anomalyDocumentLabel(parts: {
+  document_id: string;
+  display_name?: string | null;
+}): string {
+  const name = parts.display_name?.trim();
+  if (name) {
+    return name;
+  }
+  return `Bill ${parts.document_id.slice(0, 8)}…`;
+}
+
+type AnomalyDocumentGroup = {
+  document_id: string;
+  display_name: string | null;
+  site_name: string | null;
+  site_id: string | null;
+  anomalies: AnomalyResponse[];
+  latest_at: string;
+};
+
+const ANOMALY_REVIEW_PRIORITY: Record<AnomalyReviewStatus, number> = {
+  flagged: 4,
+  open: 3,
+  dismissed: 2,
+  approved: 1,
+};
+
+function rollupAnomalyReviewStatus(statuses: AnomalyReviewStatus[]): AnomalyReviewStatus | null {
+  if (statuses.length === 0) {
+    return null;
+  }
+  return statuses.reduce((best, s) =>
+    ANOMALY_REVIEW_PRIORITY[s] > ANOMALY_REVIEW_PRIORITY[best] ? s : best,
+  );
+}
+
+function groupAnomaliesByDocument(rows: AnomalyResponse[]): AnomalyDocumentGroup[] {
+  const byDoc = new Map<string, AnomalyResponse[]>();
+  for (const row of rows) {
+    const bucket = byDoc.get(row.document_id) ?? [];
+    bucket.push(row);
+    byDoc.set(row.document_id, bucket);
+  }
+  const groups: AnomalyDocumentGroup[] = [];
+  for (const [document_id, anomalies] of byDoc) {
+    anomalies.sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    );
+    const display_name =
+      anomalies.map((a) => a.document_display_name?.trim()).find(Boolean) ?? null;
+    const head = anomalies[0]!;
+    groups.push({
+      document_id,
+      display_name,
+      site_name: head.site_name,
+      site_id: head.site_id,
+      anomalies,
+      latest_at: head.updated_at,
+    });
+  }
+  groups.sort((a, b) => new Date(b.latest_at).getTime() - new Date(a.latest_at).getTime());
+  return groups;
+}
+
 /** §5 workflow label for anomaly inbox. */
 function reviewStatusLabel(status: string): string {
   switch (status) {
@@ -171,6 +237,14 @@ function isAnomalyRowInteractiveTarget(target: EventTarget | null): boolean {
     return false;
   }
   return Boolean(target.closest(".anomaly-actions-cell, button, a, select, textarea, input, label"));
+}
+
+/** Documents list: ignore clicks on action cells (e.g. link to anomalies inbox). */
+function isDocTableInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest(".doc-table__action-cell, button, a, select, textarea, input, label"));
 }
 
 /** §5e: confirm transition with optional audit note before POST …/review. */
@@ -429,10 +503,211 @@ function DocumentPreview({ viewer }: { viewer: DocumentViewerResponse }) {
 }
 
 function documentRowLabel(row: { display_name: string | null; document_id: string }): string {
-  if (row.display_name?.trim()) {
-    return row.display_name.trim();
-  }
-  return row.document_id.slice(0, 8) + "…";
+  return anomalyDocumentLabel(row);
+}
+
+const ANOMALY_TABLE_COL_COUNT = 9;
+
+/** Anomalies grouped under each bill/document so org-wide inbox maps clearly to uploads. */
+function AnomaliesGroupedInbox({
+  groups,
+  signalCount,
+  documentFilter,
+  onOpenDocument,
+  reviewEventsExpandedId,
+  reviewEventsLoadingId,
+  reviewEventsByAnomalyId,
+  anomalyReviewBusyId,
+  onRequestReview,
+  onToggleHistory,
+}: {
+  groups: AnomalyDocumentGroup[];
+  signalCount: number;
+  documentFilter: string;
+  onOpenDocument: (documentId: string) => void;
+  reviewEventsExpandedId: string | null;
+  reviewEventsLoadingId: string | null;
+  reviewEventsByAnomalyId: Record<string, AnomalyReviewEventResponse[]>;
+  anomalyReviewBusyId: string | null;
+  onRequestReview: (
+    e: MouseEvent<HTMLButtonElement>,
+    anomalyId: string,
+    to: AnomalyReviewStatus,
+    label: string,
+  ) => void;
+  onToggleHistory: (e: MouseEvent<HTMLButtonElement>, anomalyId: string) => void;
+}) {
+  return (
+    <div className="anomaly-by-document">
+      <p className="anomaly-by-document-summary" role="status">
+        <strong>{signalCount}</strong> signal{signalCount === 1 ? "" : "s"} across{" "}
+        <strong>{groups.length}</strong> document{groups.length === 1 ? "" : "s"}
+        {documentFilter ? " (filtered)" : ""}.
+      </p>
+      {groups.map((group) => {
+        const reviewRollup = rollupAnomalyReviewStatus(
+          group.anomalies.map((a) => a.review_status),
+        );
+        const severityCounts = { critical: 0, warning: 0, info: 0 };
+        for (const a of group.anomalies) {
+          if (a.severity === "critical" || a.severity === "warning" || a.severity === "info") {
+            severityCounts[a.severity] += 1;
+          }
+        }
+        return (
+          <section key={group.document_id} className="anomaly-doc-group card card--nested">
+            <header className="anomaly-doc-group__header">
+              <div className="anomaly-doc-group__title-block">
+                <h3 className="anomaly-doc-group__title">{anomalyDocumentLabel(group)}</h3>
+                <p className="anomaly-doc-group__meta">
+                  <span>
+                    {group.anomalies.length} signal{group.anomalies.length === 1 ? "" : "s"}
+                  </span>
+                  {group.site_name ? (
+                    <>
+                      <span className="anomaly-doc-group__sep">·</span>
+                      <span>{group.site_name}</span>
+                    </>
+                  ) : null}
+                  <span className="anomaly-doc-group__sep">·</span>
+                  <code className="anomaly-doc-group__id" title={group.document_id}>
+                    {group.document_id}
+                  </code>
+                </p>
+              </div>
+              <div className="anomaly-doc-group__badges">
+                {severityCounts.critical > 0 ? (
+                  <span className="comparison-severity comparison-severity--critical">
+                    {severityCounts.critical} critical
+                  </span>
+                ) : null}
+                {severityCounts.warning > 0 ? (
+                  <span className="comparison-severity comparison-severity--warning">
+                    {severityCounts.warning} warning
+                  </span>
+                ) : null}
+                {severityCounts.info > 0 ? (
+                  <span className="comparison-severity comparison-severity--info">
+                    {severityCounts.info} info
+                  </span>
+                ) : null}
+                {reviewRollup ? (
+                  <span className={`review-status-pill review-status-pill--${reviewRollup}`}>
+                    {reviewStatusLabel(reviewRollup)}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="secondary anomaly-doc-group__open"
+                onClick={() => onOpenDocument(group.document_id)}
+              >
+                View bill
+              </button>
+            </header>
+            <div className="table-wrap anomaly-doc-group__table">
+              <table className="doc-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Severity</th>
+                    <th>Grounding</th>
+                    <th>Rule</th>
+                    <th>Explanation</th>
+                    <th>Summary</th>
+                    <th>Review</th>
+                    <th>Note</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.anomalies.map((row) => (
+                    <Fragment key={row.id}>
+                      <tr
+                        className="doc-table__row"
+                        onClick={(e) => {
+                          if (isAnomalyRowInteractiveTarget(e.target)) {
+                            return;
+                          }
+                          onOpenDocument(row.document_id);
+                        }}
+                        onKeyDown={(ev) => {
+                          if (ev.key === "Enter" || ev.key === " ") {
+                            if (isAnomalyRowInteractiveTarget(ev.target)) {
+                              return;
+                            }
+                            ev.preventDefault();
+                            onOpenDocument(row.document_id);
+                          }
+                        }}
+                        tabIndex={0}
+                        role="button"
+                        title={
+                          row.explainability.reasons.length
+                            ? row.explainability.reasons.join(" ")
+                            : undefined
+                        }
+                        aria-label={`${row.title} — open ${anomalyDocumentLabel(group)}`}
+                      >
+                        <td>{new Date(row.updated_at).toLocaleString()}</td>
+                        <td>
+                          <span className={`comparison-severity comparison-severity--${row.severity}`}>
+                            {comparisonSeverityLabel(row.severity)}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className={`confidence-pill confidence-pill--${row.explainability.confidence}`}
+                            title={row.explainability.version}
+                          >
+                            {explainConfidenceLabel(row.explainability.confidence)}
+                          </span>
+                        </td>
+                        <td className="cell-mono">{row.rule_id}</td>
+                        <td className="anomaly-explanation-cell">{row.explainability.explanation}</td>
+                        <td>{row.summary}</td>
+                        <td>
+                          <span className={`review-status-pill review-status-pill--${row.review_status}`}>
+                            {reviewStatusLabel(row.review_status)}
+                          </span>
+                        </td>
+                        <td className="anomaly-note-cell" title={row.latest_review_note ?? undefined}>
+                          {row.latest_review_note ?? "—"}
+                        </td>
+                        <td
+                          className="anomaly-actions-cell"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <AnomalyReviewActions
+                            row={row}
+                            busy={anomalyReviewBusyId === row.id}
+                            historyExpanded={reviewEventsExpandedId === row.id}
+                            historyLoading={reviewEventsLoadingId === row.id}
+                            onRequestReview={onRequestReview}
+                            onToggleHistory={onToggleHistory}
+                          />
+                        </td>
+                      </tr>
+                      {reviewEventsExpandedId === row.id ? (
+                        <tr className="review-events-row">
+                          <td colSpan={ANOMALY_TABLE_COL_COUNT}>
+                            <AnomalyReviewEventsPanel
+                              events={reviewEventsByAnomalyId[row.id] ?? []}
+                              loading={reviewEventsLoadingId === row.id}
+                            />
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
 }
 
 function DocumentViewerPanel({
@@ -471,6 +746,7 @@ function DocumentViewerPanel({
   comparison,
   comparisonLoading,
   comparisonError,
+  onViewSignals,
 }: {
   headerDocumentId: string | null;
   viewer: DocumentViewerResponse | null;
@@ -510,6 +786,8 @@ function DocumentViewerPanel({
   comparison?: DocumentComparisonResponse | null;
   comparisonLoading?: boolean;
   comparisonError?: string | null;
+  /** Jump to Anomalies tab filtered to this document. */
+  onViewSignals?: () => void;
 }) {
   const showPanel =
     loading ||
@@ -823,7 +1101,14 @@ function DocumentViewerPanel({
           ) : null}
           {comparisonLoading || comparisonError || comparison !== undefined ? (
             <div className="comparison-section" aria-live="polite">
-              <h4 className="comparison-title">Comparison insights</h4>
+              <div className="comparison-section__head">
+                <h4 className="comparison-title">Comparison insights</h4>
+                {onViewSignals ? (
+                  <button type="button" className="secondary comparison-inbox-link" onClick={() => onViewSignals()}>
+                    View in signals inbox
+                  </button>
+                ) : null}
+              </div>
               <p className="comparison-note">
                 We compare this bill to the <strong>previous</strong> one at the same site when history exists.
                 We always check whether the header total matches line items on <strong>this</strong> bill (no AI).
@@ -1003,6 +1288,9 @@ export function App() {
   const [anomalyListError, setAnomalyListError] = useState<string | null>(null);
   /** §5c inbox filter: empty string = all statuses. */
   const [anomalyReviewFilter, setAnomalyReviewFilter] = useState<string>("");
+  /** Narrow anomalies inbox to one bill/document (empty = all). */
+  const [anomalyDocumentFilter, setAnomalyDocumentFilter] = useState("");
+  const [anomalyDocumentFilterLabel, setAnomalyDocumentFilterLabel] = useState("");
   const [anomalyReviewBusyId, setAnomalyReviewBusyId] = useState<string | null>(null);
   /** §5e modal: set when user picks Approve/Dismiss/Flag/Reopen before POST. */
   const [pendingReview, setPendingReview] = useState<{
@@ -1606,6 +1894,16 @@ export function App() {
     closeViewer();
   }, [closeViewer]);
 
+  const goToAnomaliesForDocument = useCallback(
+    (documentId: string, label: string) => {
+      setAnomalyDocumentFilter(documentId);
+      setAnomalyDocumentFilterLabel(label);
+      setView("anomalies");
+      closeViewer();
+    },
+    [closeViewer],
+  );
+
   useEffect(() => {
     if (view !== "anomalies") {
       return;
@@ -1718,6 +2016,23 @@ export function App() {
     [openDocumentInViewer],
   );
 
+  const filteredAnomalyRows = useMemo(() => {
+    if (!anomalyDocumentFilter) {
+      return anomalyRows;
+    }
+    return anomalyRows.filter((r) => r.document_id === anomalyDocumentFilter);
+  }, [anomalyRows, anomalyDocumentFilter]);
+
+  const anomalyGroupsFiltered = useMemo(
+    () => groupAnomaliesByDocument(filteredAnomalyRows),
+    [filteredAnomalyRows],
+  );
+
+  const handleAnomalyDocumentFilterChange = useCallback((documentId: string, label: string) => {
+    setAnomalyDocumentFilter(documentId);
+    setAnomalyDocumentFilterLabel(label);
+  }, []);
+
   const handleReprocessSelected = useCallback(async () => {
     if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       return;
@@ -1818,6 +2133,19 @@ export function App() {
     comparison,
     comparisonLoading,
     comparisonError,
+    onViewSignals:
+      documentViewer?.document_id != null
+        ? () =>
+            goToAnomaliesForDocument(
+              documentViewer.document_id,
+              documentViewer.display_name?.trim()
+                ? documentViewer.display_name.trim()
+                : anomalyDocumentLabel({
+                    document_id: documentViewer.document_id,
+                    display_name: documentViewer.display_name,
+                  }),
+            )
+        : undefined,
   };
 
   if (!authUser) {
@@ -2147,7 +2475,8 @@ export function App() {
               </button>
             </div>
             <p className="doc-list-lede">
-              Newest first. Click a row to preview the file and review the extracted bill.
+              Newest first. Click a row to preview the file and review the extracted bill. Use{" "}
+              <strong>Signals</strong> to open this bill&apos;s saved comparison signals in the Anomalies tab.
             </p>
             {docListError ? <p className="error">{docListError}</p> : null}
             {!docListError && !docListLoading && docRows.length === 0 ? (
@@ -2166,6 +2495,7 @@ export function App() {
                       <th>Source</th>
                       <th>MIME</th>
                       <th>Size</th>
+                      <th>Signals</th>
                       <th>Document ID</th>
                     </tr>
                   </thead>
@@ -2174,9 +2504,17 @@ export function App() {
                       <tr
                         key={row.document_id}
                         className={`doc-table__row${selectedDocId === row.document_id ? " doc-table__row--selected" : ""}`}
-                        onClick={() => openDocumentInViewer(row.document_id)}
+                        onClick={(e) => {
+                          if (isDocTableInteractiveTarget(e.target)) {
+                            return;
+                          }
+                          openDocumentInViewer(row.document_id);
+                        }}
                         onKeyDown={(ev) => {
                           if (ev.key === "Enter" || ev.key === " ") {
+                            if (isDocTableInteractiveTarget(ev.target)) {
+                              return;
+                            }
                             ev.preventDefault();
                             openDocumentInViewer(row.document_id);
                           }
@@ -2207,6 +2545,18 @@ export function App() {
                         <td>{row.source}</td>
                         <td className="cell-mono">{row.mime_type}</td>
                         <td>{formatBytes(row.byte_size)}</td>
+                        <td className="doc-table__action-cell">
+                          <button
+                            type="button"
+                            className="doc-table__link-btn"
+                            title="Open saved comparison signals for this bill"
+                            onClick={() =>
+                              goToAnomaliesForDocument(row.document_id, documentRowLabel(row))
+                            }
+                          >
+                            {row.anomaly_review_status ? "View signals" : "Signals"}
+                          </button>
+                        </td>
                         <td className="cell-mono cell-id">{row.document_id}</td>
                       </tr>
                     ))}
@@ -2239,6 +2589,14 @@ export function App() {
           <div className="doc-list-toolbar">
             <h2>Saved comparison signals</h2>
             <div className="anomaly-toolbar-controls">
+              <AnomalyDocumentFilter
+                apiBase={apiBase}
+                orgId={effectiveOrgId}
+                value={anomalyDocumentFilter}
+                selectedLabel={anomalyDocumentFilterLabel}
+                openDisabled={!effectiveOrgId || !isUuid(effectiveOrgId)}
+                onChange={handleAnomalyDocumentFilterChange}
+              />
               <label className="field field--inline anomaly-filter-field">
                 <span>Review status</span>
                 <select
@@ -2263,12 +2621,11 @@ export function App() {
             </div>
           </div>
           <p className="doc-list-lede">
-            Rows are written when the backend runs §3b comparison (
-            <code>/bill/comparison</code>). Use <strong>Refresh</strong> to run comparison on all
-            finished bills for this org (and selected site, if any), then reload the list—no need to
-            open each document first. §4 adds a template explanation and grounding tier from saved
-            evidence. §5 adds review status and row actions. Use the site picker under Connection
-            to filter this list.
+            Signals are grouped by <strong>bill / document</strong> so you can see which upload each
+            row belongs to. Use <strong>Filter by bill</strong> (search name or UUID, paginated) or{" "}
+            <strong>View bill</strong> on a group to open the PDF and comparison panel.{" "}
+            <strong>Refresh</strong> runs comparison on
+            finished bills (optionally filtered by site under Connection).
           </p>
           {anomalyListError ? <p className="error">{anomalyListError}</p> : null}
           {!anomalyListError && !anomalyListLoading && anomalyRows.length === 0 ? (
@@ -2278,109 +2635,31 @@ export function App() {
               eligible documents and load this list, or open a document to run comparison for that bill only.
             </p>
           ) : null}
-          {anomalyRows.length > 0 ? (
-            <div className="table-wrap">
-              <table className="doc-table">
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Severity</th>
-                    <th>Grounding</th>
-                    <th>Rule</th>
-                    <th>Site</th>
-                    <th>Document name</th>
-                    <th>Explanation</th>
-                    <th>Summary</th>
-                    <th>Review</th>
-                    <th>Note</th>
-                    <th>Actions</th>
-                    <th>Document</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {anomalyRows.map((row) => (
-                    <Fragment key={row.id}>
-                    <tr
-                      className="doc-table__row"
-                      onClick={(e) => {
-                        if (isAnomalyRowInteractiveTarget(e.target)) {
-                          return;
-                        }
-                        openAnomalyContext(row.document_id);
-                      }}
-                      onKeyDown={(ev) => {
-                        if (ev.key === "Enter" || ev.key === " ") {
-                          if (isAnomalyRowInteractiveTarget(ev.target)) {
-                            return;
-                          }
-                          ev.preventDefault();
-                          openAnomalyContext(row.document_id);
-                        }
-                      }}
-                      tabIndex={0}
-                      role="button"
-                      title={row.explainability.reasons.length ? row.explainability.reasons.join(" ") : undefined}
-                      aria-label={`Open document ${row.document_display_name?.trim() || row.document_id} for anomaly ${row.id}`}
-                    >
-                      <td>{new Date(row.updated_at).toLocaleString()}</td>
-                      <td>
-                        <span className={`comparison-severity comparison-severity--${row.severity}`}>
-                          {comparisonSeverityLabel(row.severity)}
-                        </span>
-                      </td>
-                      <td>
-                        <span
-                          className={`confidence-pill confidence-pill--${row.explainability.confidence}`}
-                          title={row.explainability.version}
-                        >
-                          {explainConfidenceLabel(row.explainability.confidence)}
-                        </span>
-                      </td>
-                      <td className="cell-mono">{row.rule_id}</td>
-                      <td>{row.site_name ?? (row.site_id ? row.site_id : "—")}</td>
-                      <td className="doc-table__name" title={row.document_display_name ?? undefined}>
-                        {row.document_display_name?.trim() || "—"}
-                      </td>
-                      <td className="anomaly-explanation-cell">{row.explainability.explanation}</td>
-                      <td>{row.summary}</td>
-                      <td>
-                        <span className={`review-status-pill review-status-pill--${row.review_status}`}>
-                          {reviewStatusLabel(row.review_status)}
-                        </span>
-                      </td>
-                      <td className="anomaly-note-cell" title={row.latest_review_note ?? undefined}>
-                        {row.latest_review_note ?? "—"}
-                      </td>
-                      <td
-                        className="anomaly-actions-cell"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <AnomalyReviewActions
-                          row={row}
-                          busy={anomalyReviewBusyId === row.id}
-                          historyExpanded={reviewEventsExpandedId === row.id}
-                          historyLoading={reviewEventsLoadingId === row.id}
-                          onRequestReview={handleRequestAnomalyReview}
-                          onToggleHistory={handleToggleAnomalyReviewHistory}
-                        />
-                      </td>
-                      <td className="cell-mono cell-id">{row.document_id}</td>
-                    </tr>
-                    {reviewEventsExpandedId === row.id ? (
-                      <tr className="review-events-row">
-                        <td colSpan={11}>
-                          <AnomalyReviewEventsPanel
-                            events={reviewEventsByAnomalyId[row.id] ?? []}
-                            loading={reviewEventsLoadingId === row.id}
-                          />
-                        </td>
-                      </tr>
-                    ) : null}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {filteredAnomalyRows.length > 0 ? (
+            <AnomaliesGroupedInbox
+              groups={anomalyGroupsFiltered}
+              signalCount={filteredAnomalyRows.length}
+              documentFilter={anomalyDocumentFilter}
+              onOpenDocument={openAnomalyContext}
+              reviewEventsExpandedId={reviewEventsExpandedId}
+              reviewEventsLoadingId={reviewEventsLoadingId}
+              reviewEventsByAnomalyId={reviewEventsByAnomalyId}
+              anomalyReviewBusyId={anomalyReviewBusyId}
+              onRequestReview={handleRequestAnomalyReview}
+              onToggleHistory={handleToggleAnomalyReviewHistory}
+            />
+          ) : null}
+          {anomalyDocumentFilter && anomalyRows.length > 0 && filteredAnomalyRows.length === 0 ? (
+            <p className="hint">
+              No comparison signals for {anomalyDocumentFilterLabel || "this document"} yet. Clear the
+              filter or open the bill and run comparison.
+            </p>
+          ) : null}
+          {anomalyDocumentFilter && anomalyRows.length === 0 && !anomalyListLoading ? (
+            <p className="hint">
+              No signals loaded. Click <strong>Refresh</strong> after picking a document, or clear the
+              filter to see all signals.
+            </p>
           ) : null}
         </section>
       )}

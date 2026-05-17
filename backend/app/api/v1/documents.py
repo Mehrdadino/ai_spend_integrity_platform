@@ -24,6 +24,7 @@ from app.repositories.bills import get_bill_for_org_document, get_prior_bills_fo
 from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
 from app.repositories.anomalies import review_status_by_document_ids
 from app.repositories.documents import (
+    browse_documents_for_organization,
     get_document_for_organization,
     list_documents_for_organization,
     update_document_display_name_for_organization,
@@ -35,6 +36,7 @@ from app.services.comparison.period import BILL_ORDERING_NOTE
 from app.services.document_site import DocumentSiteAssignmentError, assign_site_to_document
 from app.schemas.documents import (
     CompleteUploadResponse,
+    DocumentBrowseResponse,
     DocumentDetailResponse,
     DocumentListItemResponse,
     DocumentReadUrlResponse,
@@ -69,6 +71,36 @@ from app.services.upload_sessions import (
 )
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+def _document_list_items(
+    db: Session,
+    *,
+    organization_id: UUID,
+    rows: list[Document],
+) -> list[DocumentListItemResponse]:
+    """Map ORM rows to list DTOs with optional anomaly review rollup per document."""
+    review_by_doc = review_status_by_document_ids(
+        db,
+        organization_id=organization_id,
+        document_ids=[doc.id for doc in rows],
+    )
+    return [
+        DocumentListItemResponse(
+            document_id=doc.id,
+            display_name=doc.display_name,
+            site_id=doc.site_id,
+            mime_type=doc.mime_type,
+            byte_size=doc.byte_size,
+            sha256=doc.sha256,
+            source=doc.source,
+            processing_status=doc.processing_status,
+            processing_error=doc.processing_error,
+            anomaly_review_status=review_by_doc.get(doc.id),
+            created_at=doc.created_at,
+        )
+        for doc in rows
+    ]
 
 
 def _document_detail_response(db: Session, doc: Document) -> DocumentDetailResponse:
@@ -109,27 +141,35 @@ def get_documents(
 ) -> list[DocumentListItemResponse]:
     """List documents for the tenant (step 1h): ingestion / pipeline status overview."""
     rows = list_documents_for_organization(db, organization_id=ctx.organization.id, limit=limit)
-    review_by_doc = review_status_by_document_ids(
+    return _document_list_items(db, organization_id=ctx.organization.id, rows=rows)
+
+
+@router.get("/browse", response_model=DocumentBrowseResponse)
+def browse_documents(
+    db: Session = Depends(get_db),
+    ctx: AuthContext = Depends(require_auth_context),
+    q: str | None = Query(
+        None,
+        max_length=255,
+        description="Optional filter: display name or document UUID fragment (case-insensitive).",
+    ),
+    offset: int = Query(0, ge=0, description="Pagination offset (newest documents first)."),
+    limit: int = Query(20, ge=1, le=50, description="Page size (default 20)."),
+) -> DocumentBrowseResponse:
+    """Paginated document search for anomaly inbox and other pickers (scales to large orgs)."""
+    rows, total = browse_documents_for_organization(
         db,
         organization_id=ctx.organization.id,
-        document_ids=[doc.id for doc in rows],
+        q=q,
+        offset=offset,
+        limit=limit,
     )
-    return [
-        DocumentListItemResponse(
-            document_id=doc.id,
-            display_name=doc.display_name,
-            site_id=doc.site_id,
-            mime_type=doc.mime_type,
-            byte_size=doc.byte_size,
-            sha256=doc.sha256,
-            source=doc.source,
-            processing_status=doc.processing_status,
-            processing_error=doc.processing_error,
-            anomaly_review_status=review_by_doc.get(doc.id),
-            created_at=doc.created_at,
-        )
-        for doc in rows
-    ]
+    return DocumentBrowseResponse(
+        items=_document_list_items(db, organization_id=ctx.organization.id, rows=rows),
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.post("/presigned-upload", response_model=PresignedUploadResponse)

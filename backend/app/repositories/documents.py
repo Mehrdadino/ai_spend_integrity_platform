@@ -10,8 +10,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import cast, func, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.types import String
 
 from app.models.bill import Bill
 from app.models.document import Document
@@ -39,6 +40,48 @@ def list_documents_for_organization(
         .limit(limit)
     )
     return list(session.scalars(stmt).all())
+
+
+def _document_search_filter(q: str):
+    """Match optional user text against display name or document UUID substring."""
+    term = q.strip()
+    if not term:
+        return None
+    pattern = f"%{term}%"
+    return or_(
+        Document.display_name.ilike(pattern),
+        cast(Document.id, String).ilike(pattern),
+    )
+
+
+def browse_documents_for_organization(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    q: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> tuple[list[Document], int]:
+    """Paginated document search for inbox pickers (name or UUID fragment, newest first)."""
+    safe_offset = max(0, offset)
+    safe_limit = max(1, min(limit, 50))
+    filters = list(_active_document_filters(organization_id))
+    search = _document_search_filter(q or "")
+    if search is not None:
+        filters.append(search)
+
+    count_stmt = select(func.count()).select_from(Document).where(*filters)
+    total = int(session.scalar(count_stmt) or 0)
+
+    stmt = (
+        select(Document)
+        .where(*filters)
+        .order_by(Document.created_at.desc())
+        .offset(safe_offset)
+        .limit(safe_limit)
+    )
+    rows = list(session.scalars(stmt).all())
+    return rows, total
 
 
 def list_extracted_document_ids_with_bills(

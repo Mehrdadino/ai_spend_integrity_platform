@@ -297,6 +297,39 @@ export async function completeUpload(
   return res.json() as Promise<CompleteUploadResponse>;
 }
 
+export interface DocumentBrowseResponse {
+  items: DocumentListItemResponse[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+/** Paginated document search for anomaly inbox picker (name or UUID fragment). */
+export async function fetchDocumentsBrowse(
+  apiBase: string,
+  orgId: string,
+  opts?: { q?: string; offset?: number; limit?: number },
+): Promise<DocumentBrowseResponse> {
+  const params = new URLSearchParams();
+  if (opts?.q?.trim()) {
+    params.set("q", opts.q.trim());
+  }
+  if (opts?.offset != null && opts.offset > 0) {
+    params.set("offset", String(opts.offset));
+  }
+  if (opts?.limit != null) {
+    params.set("limit", String(opts.limit));
+  }
+  const res = await fetch(`${apiBase}/api/v1/documents/browse?${params}`, {
+    headers: tenantHeaders(orgId),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Document browse failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<DocumentBrowseResponse>;
+}
+
 /** List documents for the org (newest first); used by ingestion status UI (step 1h). */
 export async function fetchDocumentsList(
   apiBase: string,
