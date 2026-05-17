@@ -51,6 +51,7 @@ from app.schemas.documents import (
 )
 from app.services.document_soft_delete import soft_delete_document
 from app.services.comparison_queue import (
+    enqueue_comparison_refresh_after_document_soft_delete,
     enqueue_document_comparison_backfill_safe,
     enqueue_site_comparison_refresh_safe,
 )
@@ -376,6 +377,7 @@ def patch_document_site(
 @router.delete("/{document_id}", response_model=DeleteDocumentResponse)
 def delete_document(
     document_id: UUID,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     ctx: AuthContext = Depends(require_admin),
 ) -> DeleteDocumentResponse:
@@ -385,6 +387,12 @@ def delete_document(
     )
     if doc is None or doc.deleted_at is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    # §3e: neighbors' MoM / new-fee priors may have pointed at this bill; refresh the site chain.
+    background_tasks.add_task(
+        enqueue_comparison_refresh_after_document_soft_delete,
+        ctx.organization.id,
+        doc.site_id,
+    )
     return DeleteDocumentResponse(document_id=doc.id, deleted_at=doc.deleted_at)
 
 

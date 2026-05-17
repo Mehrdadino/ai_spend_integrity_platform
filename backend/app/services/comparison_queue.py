@@ -1,8 +1,9 @@
 """Enqueue §3e comparison backfill (separate small RQ jobs on the ``documents`` queue).
 
 After the document worker materializes a bill, we queue ``run_document_comparison_backfill_job``
-so ``anomalies`` rows exist without calling ``GET …/bill/comparison``. Site reassignment may
-queue a **site-wide refresh** for the previous ``site_id`` so remaining bills there get new priors.
+so ``anomalies`` rows exist without calling ``GET …/bill/comparison``. Site reassignment and
+document soft-delete may queue a **site-wide refresh** so remaining bills get priors that skip
+removed or reassigned neighbors.
 """
 
 from __future__ import annotations
@@ -81,3 +82,17 @@ def enqueue_site_comparison_refresh_safe(organization_id: uuid.UUID, site_id: uu
             organization_id,
             site_id,
         )
+
+
+def enqueue_comparison_refresh_after_document_soft_delete(
+    organization_id: uuid.UUID,
+    site_id: uuid.UUID | None,
+) -> None:
+    """§3e: after soft delete, recompute anomalies for bills still on ``site_id``.
+
+    The deleted document's rows are hidden from the inbox; neighbors may still reference it as
+    a prior until comparison runs again with ``Document.deleted_at IS NULL`` filters.
+    """
+    if site_id is None:
+        return
+    enqueue_site_comparison_refresh_safe(organization_id, site_id)

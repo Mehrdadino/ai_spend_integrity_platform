@@ -1,4 +1,8 @@
-"""Soft-delete documents (tenant-scoped); object bytes remain in storage for now."""
+"""Soft-delete documents (tenant-scoped); object bytes remain in storage for now.
+
+The HTTP delete route also queues §3e site comparison refresh when ``site_id`` is set so
+remaining bills at that site get updated priors (see ``comparison_queue``).
+"""
 
 from __future__ import annotations
 
