@@ -47,13 +47,13 @@ class Document(Base):
 
     __tablename__ = "documents"
     __table_args__ = (
-        # Allow many in-flight uploads (sha256 NULL); enforce uniqueness once finalized.
+        # Allow many in-flight uploads (sha256 NULL); dedupe active rows only (soft-deleted excluded).
         Index(
-            "uq_documents_org_sha256_not_null",
+            "uq_documents_org_sha256_active",
             "organization_id",
             "sha256",
             unique=True,
-            postgresql_where=text("sha256 IS NOT NULL"),
+            postgresql_where=text("sha256 IS NOT NULL AND deleted_at IS NULL"),
         ),
     )
 

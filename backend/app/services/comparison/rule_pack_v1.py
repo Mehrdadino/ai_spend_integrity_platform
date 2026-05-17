@@ -23,6 +23,7 @@ from app.services.comparison.rules_config import (
     MOM_PERCENT_WARNING,
     RULE_PACK_VERSION,
 )
+from app.services.comparison.single_bill_integrity import evaluate_single_bill_integrity
 
 
 def _decimal_str(value: Decimal) -> str:
@@ -173,8 +174,18 @@ def evaluate_rule_pack_v1(
     current: Bill,
     priors: Sequence[Bill],
 ) -> tuple[list[ComparisonFindingResponse], UUID | None]:
-    """Run all v1 rules; return findings and the prior bill id used for MoM (if any)."""
+    """Run all v1 rules; return findings and the prior bill id used for MoM (if any).
+
+    ``header_total_mismatch`` runs on every bill (no prior required). MoM and new-fee rules
+    need the immediate prior bill at the same ``site_id``.
+    """
     findings: list[ComparisonFindingResponse] = []
+
+    header_find = _check_header_total_mismatch(current)
+    if header_find is not None:
+        findings.append(header_find)
+
+    findings.extend(evaluate_single_bill_integrity(current))
 
     if current.site_id is None:
         findings.append(
@@ -192,18 +203,18 @@ def evaluate_rule_pack_v1(
             _finding(
                 rule_id="no_prior_bill",
                 severity="info",
-                title="No prior bill for this site",
-                summary="Upload an older bill for the same site to enable month-over-month checks.",
+                title="First bill at this site (baseline)",
+                summary=(
+                    "This is the first bill we have for this location. Upload an older month at the "
+                    "same site to enable month-over-month and new-fee comparisons. We still ran "
+                    "single-bill integrity checks (header vs lines, duplicate lines, fee share, etc.)."
+                ),
             )
         )
         return findings, None
 
     prior = priors[0]
     compared_id: UUID = prior.id
-
-    header_find = _check_header_total_mismatch(current)
-    if header_find is not None:
-        findings.append(header_find)
 
     mom_find = _check_mom_total(current, prior)
     if mom_find is not None:

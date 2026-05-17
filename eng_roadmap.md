@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-15 (P1/P3 JWT auth + RBAC; §3e keyset site scans)  
+**Last updated:** 2026-05-15 (comparison-v1.1 single-bill integrity; P1/P3; §3e keyset)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -28,7 +28,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **2b** | Strict Pydantic for **`stub-v1`** and **`generic-bill-v1`** (**``extra=forbid``**). |
 | **2c–2d** | Normalization + transactional **`bills` / `bill_line_items`** upsert; **`GET …/bill`**. |
 | **3a** | Prior-bill queries: `app/services/comparison/period.py`, `app/repositories/bills.py` (`list_bills_for_site`, `get_prior_bills_for_bill`), **`GET …/bill/prior-bills`**. |
-| **3b** | Rule pack v1: `rule_pack_v1.py` (MoM total, new fee lines, header mismatch); **`GET …/bill/comparison`**; UI **Comparison insights**. |
+| **3b** | Rule pack **v1.1** (`comparison-v1.1`): `rule_pack_v1.py` + `single_bill_integrity.py` (MoM, new fees, header mismatch, duplicate lines, fee share, penalty fees, period/credit signals); **`GET …/bill/comparison`**; UI **Comparison insights**. |
 | **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`** (+ **`GET …/anomalies/{id}`** §4d); replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab. New anomalies default **`review_status=open`** (**009**). |
 | **3e** | **Shipped:** RQ backfill after worker upsert + **PATCH …/site**; **010** index ``ix_bills_org_site_period_sort``; SQL prior fetch; backfill targets via ``list_document_ids_newest_through_anchor`` (no 500/2000 prefix cap); site-wide refresh uses keyset pages (``iter_document_ids_for_site_keyset``, configurable ``SITE_BILL_REFRESH_MAX_BILLS``). |
 | **P1** | **Shipped:** ``POST /api/v1/auth/login``, ``GET /auth/me``; JWT bearer in ``require_auth_context``; optional dev ``X-Organization-Id``; migration **011_user_auth_rbac**. |

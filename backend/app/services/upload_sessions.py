@@ -17,13 +17,51 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models.document import Document
-from app.repositories.documents import get_document_for_organization
+from app.repositories.documents import (
+    get_document_by_organization_and_sha256,
+    get_document_for_organization,
+)
 from app.repositories.sites import get_site_for_organization
 from app.services.storage import generate_presigned_put_url, sha256_and_size_from_object
 
 # Processing status strings (keep aligned with ``eng_roadmap`` / worker expectations).
 PROCESSING_AWAITING_OBJECT = "awaiting_object"
 PROCESSING_QUEUED = "queued"
+
+
+class DuplicateUploadError(Exception):
+    """Same file bytes already registered for this org (active row, not soft-deleted)."""
+
+    def __init__(self, *, existing_document_id: uuid.UUID, sha256: str) -> None:
+        self.existing_document_id = existing_document_id
+        self.sha256 = sha256
+        super().__init__(
+            f"Duplicate SHA-256 for org; existing document_id={existing_document_id}"
+        )
+
+
+def remove_awaiting_upload_placeholder(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    document_id: uuid.UUID,
+) -> bool:
+    """Delete an unfinalized presigned-upload row (orphan after failed complete-upload)."""
+    from sqlalchemy import select
+
+    doc = session.scalar(
+        select(Document).where(
+            Document.id == document_id,
+            Document.organization_id == organization_id,
+            Document.processing_status == PROCESSING_AWAITING_OBJECT,
+            Document.sha256.is_(None),
+        )
+    )
+    if doc is None:
+        return False
+    session.delete(doc)
+    session.flush()
+    return True
 
 
 def create_presigned_upload(
@@ -113,13 +151,24 @@ def complete_presigned_upload(
     if size > settings.max_upload_bytes:
         raise HTTPException(status_code=400, detail="Uploaded object exceeds max_upload_bytes")
 
+    existing = get_document_by_organization_and_sha256(
+        session, organization_id=organization_id, sha256=sha256
+    )
+    if existing is not None:
+        raise DuplicateUploadError(existing_document_id=existing.id, sha256=sha256)
+
     doc.sha256 = sha256
     doc.byte_size = size
     doc.processing_status = PROCESSING_QUEUED
     try:
         session.flush()
     except IntegrityError:
-        # Another row finalized the same bytes first (org-scoped dedupe).
+        session.rollback()
+        raced = get_document_by_organization_and_sha256(
+            session, organization_id=organization_id, sha256=sha256
+        )
+        if raced is not None:
+            raise DuplicateUploadError(existing_document_id=raced.id, sha256=sha256) from None
         raise HTTPException(
             status_code=409,
             detail="This file is already registered for this organization (duplicate SHA-256)",

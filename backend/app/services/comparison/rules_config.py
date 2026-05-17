@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-RULE_PACK_VERSION = "comparison-v1"
+RULE_PACK_VERSION = "comparison-v1.1"
 
 # Month-over-month total (current vs immediate prior bill).
 MOM_PERCENT_WARNING = Decimal("10")  # |delta %| >= 10 → warning
@@ -17,3 +17,11 @@ MOM_ABSOLUTE_WARNING = Decimal("50")  # |delta USD| >= 50 when % is undefined
 
 # Header total vs sum(line amounts) on the current bill (data quality).
 HEADER_LINES_TOLERANCE = Decimal("0.05")  # allow 5 cents rounding
+
+# Single-bill integrity (no prior required).
+FEES_SHARE_WARNING_PCT = Decimal("15")  # fee sum >= 15% of bill total → warning
+FEES_SHARE_MIN_TOTAL = Decimal("25")  # ignore tiny totals
+PENALTY_FEE_LABEL_PATTERN = (
+    r"late\s*(payment|fee)?|reconnect|disconnect|penalty|collection\s*fee|"
+    r"returned\s*check|insufficient\s*funds|nsf"
+)

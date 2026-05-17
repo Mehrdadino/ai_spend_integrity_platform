@@ -53,6 +53,7 @@ def register_document_bytes(
         select(Document).where(
             Document.organization_id == organization_id,
             Document.sha256 == sha256,
+            Document.deleted_at.is_(None),
         )
     )
     if existing is not None:

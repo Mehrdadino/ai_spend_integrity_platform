@@ -390,6 +390,17 @@ body {
   font-size: 0.8rem;
 }
 
+.comparison-baseline-callout,
+.upload-baseline-note {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 .doc-viewer-card {
   margin-top: 1.25rem;
 }
@@ -541,6 +552,31 @@ body {
   padding: 0.45rem 0.55rem;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
+}
+
+.bill-table__row {
+  cursor: pointer;
+}
+
+.bill-table__row:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.bill-table__row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.bill-table__row--selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.bill-table__row--static {
+  cursor: default;
+}
+
+.bill-table__row--static:hover {
+  background: inherit;
 }
 
 .bill-table th {

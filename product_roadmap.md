@@ -20,7 +20,7 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-15 (P1/P3 auth + §3e scale)
+## Implementation status (repository) — 2026-05-15 (single-bill integrity + P1/P3)
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
@@ -32,7 +32,7 @@ Just:
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
 - **Auth (P1/P3):** JWT login (`POST /api/v1/auth/login`, `GET /auth/me`); org-scoped bearer on document/anomaly/site routes; **admin** vs **member** RBAC (admin: delete document, create site, batch materialize; member: upload/review/read). Dev **`X-Organization-Id`** still accepted when `AUTH_ALLOW_DEV_ORG_HEADER=true`. Seed users via **`seed-dev-user`**.
 - **§3a prior bills:** `list_bills_for_site` / `get_prior_bills_for_bill` + **`GET /api/v1/documents/{id}/bill/prior-bills`** (same-org, same-`site_id`; period ordering in eng **3a**).
-- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; **`GET /api/v1/anomalies`** returns **template explanations** + **grounding tiers** from saved evidence; **`GET …/anomalies/{id}`** for detail; **`POST /api/v1/anomalies/materialize-comparisons`** runs the same comparison for every finished document in the org (optional site filter) so the **Anomalies** tab **Refresh** can populate the list **without opening each document**.
+- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; **single-bill integrity** (`comparison-v1.1`) runs on every bill with no prior required (header vs lines, duplicate line fingerprints, high fee share, penalty-style fee labels, missing period dates, credits vs charges); **`GET /api/v1/anomalies`** returns **template explanations** + **grounding tiers** from saved evidence; **`GET …/anomalies/{id}`** for detail; **`POST /api/v1/anomalies/materialize-comparisons`** runs the same comparison for every finished document in the org (optional site filter) so the **Anomalies** tab **Refresh** can populate the list **without opening each document**.
 - **§5 review workflow:** Alembic **`009_anomaly_review`** adds **`review_status`** + audit **`anomaly_review_events`**; **`POST /api/v1/anomalies/{id}/review`** transitions state; inbox **Review status** filter and per-row **Actions** (approve / dismiss / flag / reopen) with optional **§5e notes** (modal + **History** audit list).
 - **§3e comparison backfill:** After the worker materializes a normalized bill, an RQ job runs the same comparison path as **`GET …/bill/comparison`** for the document (and same-site neighbors when priors can shift). Changing a document’s **site** triggers backfill plus a refresh pass for bills left on the **previous** site (when applicable). Prior-bill queries use an indexed SQL path (default **500** bills/site scan for backfill; immediate priors without loading the full chain).
 - **Document soft delete:** `deleted_at` + **`DELETE /api/v1/documents/{id}`** + UI **Delete** (hard delete / purge later).

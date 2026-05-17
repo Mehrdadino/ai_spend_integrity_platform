@@ -46,6 +46,16 @@ def build_explainability_v1(
         return _no_site(summary=summary)
     if rule_id == "no_prior_bill":
         return _no_prior(summary=summary)
+    if rule_id == "duplicate_line_fingerprint":
+        return _duplicate_lines(ev)
+    if rule_id == "fees_high_share_of_total":
+        return _fees_high_share(ev)
+    if rule_id == "penalty_style_fees":
+        return _penalty_fees(ev)
+    if rule_id == "missing_period_dates":
+        return _missing_period(summary=summary)
+    if rule_id == "credits_exceed_charges":
+        return _credits_exceed(ev)
     return ExplainabilityV1(
         explanation=(
             f"This signal uses rule “{rule_id}”. The pipeline stored a short summary; "
@@ -197,3 +207,76 @@ def _no_prior(*, summary: str) -> ExplainabilityV1:
         confidence="high",
         reasons=("Operational rule only; evidence is descriptive.",),
     )
+
+
+def _duplicate_lines(ev: Mapping[str, Any]) -> ExplainabilityV1:
+    groups = ev.get("duplicate_groups")
+    tier: ConfidenceLevel = "high"
+    reasons: tuple[str, ...] = ("Duplicate fingerprint groups are listed in evidence.",)
+    if not isinstance(groups, list) or not groups:
+        tier = "low"
+        reasons = ("Expected duplicate_groups in evidence.",)
+        count_note = "Several line items share the same normalized fingerprint."
+    else:
+        first = groups[0] if isinstance(groups[0], dict) else {}
+        label = _get_str(first, "raw_label")
+        n = first.get("count", 2)
+        count_note = f"“{label}” appears {n} times with the same classification."
+    explanation = (
+        f"On this bill alone, {count_note} That can indicate duplicate charges on one invoice "
+        "rather than a month-over-month change."
+    )
+    return ExplainabilityV1(explanation=explanation, confidence=tier, reasons=reasons)
+
+
+def _fees_high_share(ev: Mapping[str, Any]) -> ExplainabilityV1:
+    fee_sum = _get_str(ev, "fee_sum")
+    total = _get_str(ev, "bill_total")
+    pct = ev.get("fee_percent")
+    cur = _get_str(ev, "currency")
+    tier, reasons = _tier_for_keys(("fee_sum", "bill_total", "fee_percent"), ev)
+    pct_note = f" ({pct}% of the bill)" if pct is not None else ""
+    explanation = (
+        f"Fee lines on this bill add up to {fee_sum} {cur} against a total of {total} {cur}{pct_note}. "
+        "High fee share is a common review target even without prior bills to compare."
+    )
+    return ExplainabilityV1(explanation=explanation, confidence=tier, reasons=reasons)
+
+
+def _penalty_fees(ev: Mapping[str, Any]) -> ExplainabilityV1:
+    count = ev.get("count")
+    tier, reasons = _tier_for_keys(("count",), ev)
+    explanation = (
+        f"We flagged {count} fee line(s) whose labels match penalty/late/reconnect patterns. "
+        "These charges are worth disputing or verifying even on a first upload."
+    )
+    if not isinstance(count, int):
+        explanation = (
+            "One or more fee lines look like penalties or late charges based on label keywords."
+        )
+        tier = "medium"
+    return ExplainabilityV1(explanation=explanation, confidence=tier, reasons=reasons)
+
+
+def _missing_period(*, summary: str) -> ExplainabilityV1:
+    explanation = (
+        "We could not read a service period from this bill. Period dates help order bills and "
+        f"pick the right prior month. {summary}"
+    )
+    return ExplainabilityV1(
+        explanation=explanation.strip(),
+        confidence="high",
+        reasons=("Data-quality signal from extraction metadata.",),
+    )
+
+
+def _credits_exceed(ev: Mapping[str, Any]) -> ExplainabilityV1:
+    credits = _get_str(ev, "credit_sum")
+    charges = _get_str(ev, "positive_non_credit_sum")
+    cur = _get_str(ev, "currency")
+    tier, reasons = _tier_for_keys(("credit_sum", "positive_non_credit_sum"), ev)
+    explanation = (
+        f"Credits on this bill total {credits} {cur} while other positive lines sum to {charges} {cur}. "
+        "Confirm this is an adjustment or net-credit invoice rather than a mapping error."
+    )
+    return ExplainabilityV1(explanation=explanation, confidence=tier, reasons=reasons)

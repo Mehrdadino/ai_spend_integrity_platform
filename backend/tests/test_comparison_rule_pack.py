@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from app.constants.normalization import LINE_KIND_CHARGE, LINE_KIND_FEE
+from app.constants.normalization import LINE_KIND_CHARGE, LINE_KIND_CREDIT, LINE_KIND_FEE
 from app.models.bill import Bill
 from app.models.bill_line_item import BillLineItem
 from app.services.comparison.rule_pack_v1 import evaluate_rule_pack_v1
@@ -18,7 +18,8 @@ def _bill(
     bill_id: uuid.UUID | None = None,
     site_id: uuid.UUID | None = None,
     total: str | None = None,
-    period_end: date | None = None,
+    period_end: date | None = date(2026, 3, 31),
+    period_start: date | None = None,
     line_items: list[BillLineItem] | None = None,
 ) -> Bill:
     bid = bill_id or uuid.uuid4()
@@ -30,6 +31,7 @@ def _bill(
         spend_domain="utility",
         currency="USD",
         normalization_version="norm-v1",
+        period_start=period_start,
         period_end=period_end,
         created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
         total_amount=Decimal(total) if total is not None else None,
@@ -75,6 +77,20 @@ class TestRulePackV1(unittest.TestCase):
         findings, compared = evaluate_rule_pack_v1(current=current, priors=[])
         self.assertIsNone(compared)
         self.assertEqual(findings[0].rule_id, "no_prior_bill")
+
+    def test_no_prior_still_runs_header_mismatch(self) -> None:
+        current = _bill(
+            total="100.00",
+            line_items=[
+                _line(kind=LINE_KIND_CHARGE, label="A", amount="40.00"),
+                _line(kind=LINE_KIND_CHARGE, label="B", amount="50.00"),
+            ],
+        )
+        findings, compared = evaluate_rule_pack_v1(current=current, priors=[])
+        self.assertIsNone(compared)
+        rules = {f.rule_id for f in findings}
+        self.assertIn("header_total_mismatch", rules)
+        self.assertIn("no_prior_bill", rules)
 
     def test_mom_warning_on_15_percent_increase(self) -> None:
         current = _bill(total="115.00", period_end=date(2026, 3, 31))
@@ -126,6 +142,58 @@ class TestRulePackV1(unittest.TestCase):
         prior = _bill(total="100.00")
         findings, _ = evaluate_rule_pack_v1(current=current, priors=[prior])
         self.assertEqual([f.rule_id for f in findings], [])
+
+    def test_duplicate_line_fingerprint_without_prior(self) -> None:
+        dup = _line(kind=LINE_KIND_CHARGE, label="Energy charge", amount="50.00", position=1)
+        dup2 = _line(kind=LINE_KIND_CHARGE, label="Energy charge", amount="50.00", position=2)
+        current = _bill(total="100.00", line_items=[dup, dup2])
+        findings, compared = evaluate_rule_pack_v1(current=current, priors=[])
+        self.assertIsNone(compared)
+        dup_find = next(f for f in findings if f.rule_id == "duplicate_line_fingerprint")
+        self.assertEqual(dup_find.severity, "warning")
+        self.assertEqual(dup_find.evidence["duplicate_groups"][0]["count"], 2)
+
+    def test_fees_high_share_without_prior(self) -> None:
+        current = _bill(
+            total="100.00",
+            line_items=[
+                _line(kind=LINE_KIND_CHARGE, label="Usage", amount="70.00", position=1),
+                _line(kind=LINE_KIND_FEE, label="Rider surcharge", amount="20.00", position=2),
+            ],
+        )
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
+        fees = next(f for f in findings if f.rule_id == "fees_high_share_of_total")
+        self.assertEqual(fees.severity, "warning")
+
+    def test_penalty_style_fees_without_prior(self) -> None:
+        current = _bill(
+            total="110.00",
+            line_items=[
+                _line(kind=LINE_KIND_CHARGE, label="Usage", amount="100.00", position=1),
+                _line(kind=LINE_KIND_FEE, label="Late payment fee", amount="10.00", position=2),
+            ],
+        )
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
+        penalty = next(f for f in findings if f.rule_id == "penalty_style_fees")
+        self.assertEqual(penalty.evidence["count"], 1)
+
+    def test_missing_period_dates_info(self) -> None:
+        current = _bill(period_start=None, period_end=None)
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
+        missing = next(f for f in findings if f.rule_id == "missing_period_dates")
+        self.assertEqual(missing.severity, "info")
+
+    def test_credits_exceed_charges(self) -> None:
+        current = _bill(
+            total="10.00",
+            line_items=[
+                _line(kind=LINE_KIND_CHARGE, label="Usage", amount="30.00", position=1),
+                _line(kind=LINE_KIND_CREDIT, label="Bill credit", amount="-40.00", position=2),
+            ],
+        )
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
+        credit = next(f for f in findings if f.rule_id == "credits_exceed_charges")
+        self.assertEqual(credit.severity, "warning")
 
 
 if __name__ == "__main__":

@@ -107,6 +107,19 @@ function priorBillsSortedByPeriod(bills: BillResponse[]): BillResponse[] {
   return [...bills].sort((a, b) => billPeriodSortKey(b).localeCompare(billPeriodSortKey(a)));
 }
 
+/** Whether comparison findings are only informational (baseline / setup), not warnings. */
+function comparisonIsInfoOnly(comparison: DocumentComparisonResponse | null | undefined): boolean {
+  return (
+    comparison != null &&
+    comparison.findings.length > 0 &&
+    comparison.findings.every((f) => f.severity === "info")
+  );
+}
+
+function comparisonHasNoPriorBill(comparison: DocumentComparisonResponse | null | undefined): boolean {
+  return comparison?.findings.some((f) => f.rule_id === "no_prior_bill") ?? false;
+}
+
 /** Plain-language label for comparison rule severity (§3b UI). */
 function comparisonSeverityLabel(severity: string): string {
   switch (severity) {
@@ -440,6 +453,7 @@ function DocumentViewerPanel({
   priorBills,
   priorBillsLoading,
   priorBillsError,
+  onOpenPriorBill,
   comparison,
   comparisonLoading,
   comparisonError,
@@ -471,6 +485,8 @@ function DocumentViewerPanel({
   priorBills?: BillResponse[] | null;
   priorBillsLoading?: boolean;
   priorBillsError?: string | null;
+  /** Open the document for a prior bill row (same site history). */
+  onOpenPriorBill?: (documentId: string) => void;
   comparison?: DocumentComparisonResponse | null;
   comparisonLoading?: boolean;
   comparisonError?: string | null;
@@ -745,7 +761,8 @@ function DocumentViewerPanel({
             <div className="comparison-section" aria-live="polite">
               <h4 className="comparison-title">Comparison insights</h4>
               <p className="comparison-note">
-                We compare this bill to the <strong>previous</strong> one at the same site (automatic checks — no AI).
+                We compare this bill to the <strong>previous</strong> one at the same site when history exists.
+                We always check whether the header total matches line items on <strong>this</strong> bill (no AI).
                 {comparison?.rule_pack_version ? (
                   <>
                     {" "}
@@ -762,7 +779,14 @@ function DocumentViewerPanel({
               ) : null}
               {!comparisonLoading && comparison && comparison.findings.length === 0 && bill ? (
                 <p className="comparison-empty">
-                  All clear: nothing unusual found for this bill.
+                  All clear: nothing unusual found for this bill (including header vs line totals).
+                </p>
+              ) : null}
+              {!comparisonLoading && comparison && comparisonIsInfoOnly(comparison) ? (
+                <p className="comparison-baseline-callout" role="status">
+                  {comparisonHasNoPriorBill(comparison)
+                    ? "First bill at this site — saved as your baseline. Upload an older month at the same location to unlock month-over-month and new-fee checks. We still ran single-bill integrity checks (header vs lines, duplicate lines, fee share, penalty-style fees, and more)."
+                    : "Setup note: assign a site or add history to enable full comparisons. Single-bill integrity checks still run when line data is available."}
                 </p>
               ) : null}
               {!comparisonLoading && comparison && comparison.findings.length > 0 ? (
@@ -793,7 +817,9 @@ function DocumentViewerPanel({
                   No older bills for this site yet. Upload another month with the same site selected under Connection.
                 </p>
               ) : null}
-              <p className="hint prior-bills-note">Sorted by billing period (newest first).</p>
+              <p className="hint prior-bills-note">
+                Sorted by billing period (newest first). Click a row to open that bill&apos;s document.
+              </p>
               {priorBills && priorBills.length > 0 ? (
                 <div className="table-wrap bill-table-wrap">
                   <table className="bill-table">
@@ -806,14 +832,41 @@ function DocumentViewerPanel({
                       </tr>
                     </thead>
                     <tbody>
-                      {priorBillsSortedByPeriod(priorBills).map((pb) => (
-                        <tr key={pb.id}>
-                          <td className="cell-mono">{formatBillPeriod(pb)}</td>
-                          <td>{pb.issuer_name ?? "—"}</td>
-                          <td>{pb.total_amount != null ? `${pb.total_amount} ${pb.currency}` : "—"}</td>
-                          <td>{new Date(pb.created_at).toLocaleDateString()}</td>
-                        </tr>
-                      ))}
+                      {priorBillsSortedByPeriod(priorBills).map((pb) => {
+                        const openPrior = onOpenPriorBill
+                          ? () => onOpenPriorBill(pb.document_id)
+                          : undefined;
+                        const isActive = headerDocumentId === pb.document_id;
+                        return (
+                          <tr
+                            key={pb.id}
+                            className={`bill-table__row${isActive ? " bill-table__row--selected" : ""}${openPrior ? "" : " bill-table__row--static"}`}
+                            onClick={openPrior}
+                            onKeyDown={
+                              openPrior
+                                ? (ev) => {
+                                    if (ev.key === "Enter" || ev.key === " ") {
+                                      ev.preventDefault();
+                                      openPrior();
+                                    }
+                                  }
+                                : undefined
+                            }
+                            tabIndex={openPrior ? 0 : undefined}
+                            role={openPrior ? "button" : undefined}
+                            aria-label={
+                              openPrior
+                                ? `Open document for ${formatBillPeriod(pb)} bill`
+                                : undefined
+                            }
+                          >
+                            <td className="cell-mono">{formatBillPeriod(pb)}</td>
+                            <td>{pb.issuer_name ?? "—"}</td>
+                            <td>{pb.total_amount != null ? `${pb.total_amount} ${pb.currency}` : "—"}</td>
+                            <td>{new Date(pb.created_at).toLocaleDateString()}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1620,6 +1673,7 @@ export function App() {
     priorBills,
     priorBillsLoading,
     priorBillsError,
+    onOpenPriorBill: openDocumentInViewer,
     comparison,
     comparisonLoading,
     comparisonError,
@@ -1863,6 +1917,19 @@ export function App() {
             <section className="card success">
               <h2>Done</h2>
               <p className="card-subtitle">Your upload is registered. Open it below or jump to the full list.</p>
+              {selectedSiteId && siteRows.some((s) => s.id === selectedSiteId) ? (
+                <p className="hint upload-baseline-note">
+                  If this is the <strong>first bill</strong> at{" "}
+                  <strong>{siteRows.find((s) => s.id === selectedSiteId)?.name}</strong>, we save it as your
+                  baseline. Upload an <strong>older month</strong> at the same site for month-over-month checks. We
+                  still run integrity checks on every bill (header vs lines, duplicate lines, fee share, and more).
+                </p>
+              ) : (
+                <p className="hint upload-baseline-note">
+                  Assign a <strong>site</strong> on the document (or pick one under Connection before the next upload)
+                  so bills at the same location can be compared over time.
+                </p>
+              )}
               <dl className="kv">
                 <dt>Document ID</dt>
                 <dd>

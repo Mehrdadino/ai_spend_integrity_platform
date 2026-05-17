@@ -13,6 +13,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import AuthContext, require_admin, require_auth_context
@@ -54,8 +55,10 @@ from app.services.document_reprocess import (
     reprocess_document_for_organization,
 )
 from app.services.upload_sessions import (
+    DuplicateUploadError,
     complete_presigned_upload,
     create_presigned_upload,
+    remove_awaiting_upload_placeholder,
 )
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -154,7 +157,28 @@ def post_complete_upload(
     ctx: AuthContext = Depends(require_auth_context),
 ) -> CompleteUploadResponse:
     """After the client PUTs bytes to storage, finalize hash and size (server-side read)."""
-    doc = complete_presigned_upload(db, organization_id=ctx.organization.id, document_id=document_id)
+    try:
+        doc = complete_presigned_upload(
+            db, organization_id=ctx.organization.id, document_id=document_id
+        )
+    except DuplicateUploadError as exc:
+        db.rollback()
+        remove_awaiting_upload_placeholder(
+            db,
+            organization_id=ctx.organization.id,
+            document_id=document_id,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": (
+                    "This file is already registered for this organization (duplicate SHA-256). "
+                    "Delete the previous document first if you intended to replace it."
+                ),
+                "existing_document_id": str(exc.existing_document_id),
+                "sha256": exc.sha256,
+            },
+        )
     assert doc.sha256 is not None and doc.byte_size is not None
     # Runs after ``get_db`` commits so the worker sees the final ``queued`` row.
     background_tasks.add_task(enqueue_document_pipeline_safe, doc.id)
