@@ -71,6 +71,7 @@ def create_presigned_upload(
     site_id: Optional[uuid.UUID],
     mime_type: str,
     expected_byte_size: Optional[int],
+    display_name: Optional[str] = None,
 ) -> tuple[Document, str, int]:
     """Insert a placeholder ``Document`` and return a presigned PUT URL + TTL seconds.
 
@@ -101,6 +102,7 @@ def create_presigned_upload(
         mime_type=mime_type,
         byte_size=expected_byte_size,
         source="upload",
+        display_name=display_name,
         processing_status=PROCESSING_AWAITING_OBJECT,
     )
     session.add(doc)

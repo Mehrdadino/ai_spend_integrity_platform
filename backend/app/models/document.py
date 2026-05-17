@@ -1,4 +1,6 @@
-"""Stored bill file metadata: pointer to S3 object, hash, MIME, pipeline status.
+"""Stored bill file metadata: pointer to S3 object, hash, MIME, pipeline status, optional label.
+
+``display_name`` is a user-chosen label (upload or PATCH); NULL when unset or cleared.
 
 ``sha256`` and ``byte_size`` may be null while a presigned upload is in flight;
 a partial unique index enforces dedupe only once ``sha256`` is known (per org).
@@ -76,6 +78,8 @@ class Document(Base):
     mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
     byte_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="upload")
+    # Optional user label (upload-time or PATCH); NULL when unset or cleared.
+    display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # awaiting_object → queued → received → extracted | failed (worker-driven).
     processing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     # Worker/API failure summary for ingestion list UI (cleared on successful retry).

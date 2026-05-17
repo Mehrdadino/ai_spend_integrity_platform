@@ -60,6 +60,10 @@ class AnomalyResponse(BaseModel):
     site_id: Optional[UUID] = None
     site_name: Optional[str] = Field(None, description="Joined from ``sites.name`` when present.")
     document_id: UUID
+    document_display_name: Optional[str] = Field(
+        None,
+        description="Optional user label from ``documents.display_name`` (null when unset).",
+    )
     bill_id: UUID
     bill_line_item_id: Optional[UUID] = None
     compared_to_bill_id: Optional[UUID] = None

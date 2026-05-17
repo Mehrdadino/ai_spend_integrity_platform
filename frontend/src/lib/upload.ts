@@ -37,6 +37,8 @@ export interface ReprocessDocumentResponse {
 export interface DocumentDetailResponse {
   document_id: string;
   organization_id: string;
+  /** Optional user label; null when unset or cleared. */
+  display_name: string | null;
   site_id: string | null;
   bucket: string;
   object_key: string;
@@ -67,6 +69,7 @@ export interface RawExtractionSnapshotResponse {
 /** Row from ``GET /api/v1/documents`` (step 1h ingestion list). */
 export interface DocumentListItemResponse {
   document_id: string;
+  display_name: string | null;
   site_id: string | null;
   mime_type: string;
   byte_size: number | null;
@@ -165,6 +168,7 @@ export interface AnomalyResponse {
   site_id: string | null;
   site_name: string | null;
   document_id: string;
+  document_display_name: string | null;
   bill_id: string;
   bill_line_item_id: string | null;
   compared_to_bill_id: string | null;
@@ -200,20 +204,36 @@ export interface PatchDocumentSiteResponse {
   site_id: string | null;
 }
 
+export interface PatchDocumentDisplayNameResponse {
+  document_id: string;
+  display_name: string | null;
+}
+
 /** Step 1: ask API for a presigned PUT URL and a pending ``Document`` row. */
+export type PresignUploadOptions = {
+  siteId?: string | null;
+  /** Optional label; blank/omitted leaves name unset. */
+  displayName?: string | null;
+};
+
 export async function presignUpload(
   apiBase: string,
   orgId: string,
   file: File,
-  siteId?: string | null,
+  options?: PresignUploadOptions,
 ): Promise<PresignedUploadResponse> {
   const mime = file.type || "application/octet-stream";
   const body: Record<string, unknown> = {
     mime_type: mime,
     expected_byte_size: file.size,
   };
-  if (siteId && siteId.trim()) {
-    body.site_id = siteId.trim();
+  const siteId = options?.siteId?.trim();
+  if (siteId) {
+    body.site_id = siteId;
+  }
+  const displayName = options?.displayName?.trim();
+  if (displayName) {
+    body.display_name = displayName;
   }
   const res = await fetch(`${apiBase}/api/v1/documents/presigned-upload`, {
     method: "POST",
@@ -488,6 +508,26 @@ export async function fetchDocumentPriorBills(
     throw new Error(`Prior bills failed (${res.status}): ${body}`);
   }
   return res.json() as Promise<DocumentPriorBillsResponse>;
+}
+
+/** Set or clear optional display name on a document. */
+export async function patchDocumentDisplayName(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+  displayName: string | null,
+): Promise<PatchDocumentDisplayNameResponse> {
+  const trimmed = displayName?.trim() ?? "";
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/display-name`, {
+    method: "PATCH",
+    headers: tenantJsonHeaders(orgId),
+    body: JSON.stringify({ display_name: trimmed ? trimmed : null }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Update name failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<PatchDocumentDisplayNameResponse>;
 }
 
 /** Set or clear ``site_id`` on a document (and its bill). */

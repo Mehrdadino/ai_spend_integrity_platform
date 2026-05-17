@@ -56,7 +56,10 @@ def list_anomalies_for_organization(
     Default ordering: ``created_at`` descending (newest first).
     """
     cap = max(1, min(limit, 500))
-    stmt = _base_list_stmt(organization_id).options(joinedload(Anomaly.site))
+    stmt = _base_list_stmt(organization_id).options(
+        joinedload(Anomaly.site),
+        joinedload(Anomaly.document),
+    )
     if site_id is not None:
         stmt = stmt.where(Anomaly.site_id == site_id)
     if review_status is not None:
@@ -89,7 +92,7 @@ def get_anomaly_for_organization(
     stmt = (
         _base_list_stmt(organization_id)
         .where(Anomaly.id == anomaly_id)
-        .options(joinedload(Anomaly.site))
+        .options(joinedload(Anomaly.site), joinedload(Anomaly.document))
         .limit(1)
     )
     return session.scalar(stmt)

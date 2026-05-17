@@ -184,6 +184,7 @@ def get_anomaly(
 def _to_response(row: Anomaly, *, latest_review_note: str | None = None) -> AnomalyResponse:
     """Map ORM row + template explainability to HTTP model."""
     site_name = row.site.name if row.site is not None else None
+    document_display_name = row.document.display_name if row.document is not None else None
     ev = dict(row.evidence) if row.evidence is not None else {}
     ex = build_explainability_v1(
         rule_id=row.rule_id,
@@ -200,6 +201,7 @@ def _to_response(row: Anomaly, *, latest_review_note: str | None = None) -> Anom
         site_id=row.site_id,
         site_name=site_name,
         document_id=row.document_id,
+        document_display_name=document_display_name,
         bill_id=row.bill_id,
         bill_line_item_id=row.bill_line_item_id,
         compared_to_bill_id=row.compared_to_bill_id,

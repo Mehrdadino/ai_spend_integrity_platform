@@ -6,15 +6,31 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.document_display_name import normalize_display_name
 
 
 class PresignedUploadRequest(BaseModel):
-    """Client declares MIME type (signed into URL); optional site and size hint."""
+    """Client declares MIME type (signed into URL); optional site, label, and size hint."""
 
     mime_type: str = Field(..., max_length=255, examples=["application/pdf"])
     site_id: Optional[UUID] = None
+    display_name: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Optional user label; omit or send blank to leave unset.",
+    )
     expected_byte_size: Optional[int] = Field(None, ge=0)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return normalize_display_name(value)
+        return value  # type: ignore[return-value]
 
 
 class PresignedUploadResponse(BaseModel):
@@ -72,11 +88,38 @@ class DocumentReadUrlResponse(BaseModel):
     mime_type: str
 
 
+class PatchDocumentDisplayNameRequest(BaseModel):
+    """Set or clear the optional user label (null or blank clears)."""
+
+    display_name: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="User label, or null/blank to remove.",
+    )
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _normalize_display_name(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return normalize_display_name(value)
+        return value  # type: ignore[return-value]
+
+
+class PatchDocumentDisplayNameResponse(BaseModel):
+    """Echo document id and effective display name after PATCH."""
+
+    document_id: UUID
+    display_name: Optional[str] = None
+
+
 class DocumentDetailResponse(BaseModel):
     """Single document row for the upload UI / detail (1c + 1h + 2a summary)."""
 
     document_id: UUID
     organization_id: UUID
+    display_name: Optional[str] = None
     site_id: Optional[UUID] = None
     bucket: str
     object_key: str
@@ -117,6 +160,7 @@ class DocumentListItemResponse(BaseModel):
     """One row for ``GET /documents`` (step 1h): status + optional worker error."""
 
     document_id: UUID
+    display_name: Optional[str] = None
     site_id: Optional[UUID] = None
     mime_type: str
     byte_size: Optional[int] = None

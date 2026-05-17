@@ -206,6 +206,41 @@ body {
   align-items: center;
 }
 
+.doc-name-input {
+  flex: 1 1 12rem;
+  min-width: 10rem;
+  max-width: 22rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.upload-name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.75rem 0 0;
+}
+
+.upload-name-label {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.doc-viewer-display-name {
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+
+.doc-table__name {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .site-assign-btn {
   flex-shrink: 0;
 }

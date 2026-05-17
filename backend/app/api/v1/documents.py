@@ -23,7 +23,11 @@ from app.models.document import Document
 from app.repositories.bills import get_bill_for_org_document, get_prior_bills_for_org_document
 from app.repositories.document_raw_extractions import get_latest_raw_extraction_for_document
 from app.repositories.anomalies import review_status_by_document_ids
-from app.repositories.documents import get_document_for_organization, list_documents_for_organization
+from app.repositories.documents import (
+    get_document_for_organization,
+    list_documents_for_organization,
+    update_document_display_name_for_organization,
+)
 from app.schemas.bills import BillResponse, DocumentBillResponse, DocumentPriorBillsResponse
 from app.schemas.comparison import DocumentComparisonResponse
 from app.services.comparison.evaluate import evaluate_document_comparison
@@ -35,6 +39,8 @@ from app.schemas.documents import (
     DocumentListItemResponse,
     DocumentReadUrlResponse,
     DocumentViewerResponse,
+    PatchDocumentDisplayNameRequest,
+    PatchDocumentDisplayNameResponse,
     PatchDocumentSiteRequest,
     PatchDocumentSiteResponse,
     PresignedUploadRequest,
@@ -79,6 +85,7 @@ def _document_detail_response(db: Session, doc: Document) -> DocumentDetailRespo
     return DocumentDetailResponse(
         document_id=doc.id,
         organization_id=doc.organization_id,
+        display_name=doc.display_name,
         site_id=doc.site_id,
         bucket=doc.bucket,
         object_key=doc.object_key,
@@ -109,6 +116,7 @@ def get_documents(
     return [
         DocumentListItemResponse(
             document_id=doc.id,
+            display_name=doc.display_name,
             site_id=doc.site_id,
             mime_type=doc.mime_type,
             byte_size=doc.byte_size,
@@ -136,6 +144,7 @@ def post_presigned_upload(
         site_id=body.site_id,
         mime_type=body.mime_type,
         expected_byte_size=body.expected_byte_size,
+        display_name=body.display_name,
     )
     return PresignedUploadResponse(
         document_id=doc.id,
@@ -314,6 +323,25 @@ def get_document_prior_bills(
         ordering_note=BILL_ORDERING_NOTE,
         prior_bills=[BillResponse.model_validate(b) for b in priors],
     )
+
+
+@router.patch("/{document_id}/display-name", response_model=PatchDocumentDisplayNameResponse)
+def patch_document_display_name(
+    document_id: UUID,
+    body: PatchDocumentDisplayNameRequest,
+    db: Session = Depends(get_db),
+    ctx: AuthContext = Depends(require_auth_context),
+) -> PatchDocumentDisplayNameResponse:
+    """Set or clear the optional user label on a document (any pipeline status)."""
+    doc = update_document_display_name_for_organization(
+        db,
+        document_id=document_id,
+        organization_id=ctx.organization.id,
+        display_name=body.display_name,
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return PatchDocumentDisplayNameResponse(document_id=doc.id, display_name=doc.display_name)
 
 
 @router.patch("/{document_id}/site", response_model=PatchDocumentSiteResponse)

@@ -99,6 +99,27 @@ def get_document_by_organization_and_sha256(
     )
 
 
+def update_document_display_name_for_organization(
+    session: Session,
+    *,
+    document_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    display_name: Optional[str],
+) -> Optional[Document]:
+    """Set or clear ``display_name`` on an active document row."""
+    doc = session.scalar(
+        select(Document).where(
+            Document.id == document_id,
+            *_active_document_filters(organization_id),
+        )
+    )
+    if doc is None:
+        return None
+    doc.display_name = display_name
+    session.flush()
+    return doc
+
+
 def soft_delete_document_for_organization(
     session: Session,
     *,

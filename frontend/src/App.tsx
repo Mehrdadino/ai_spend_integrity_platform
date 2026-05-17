@@ -36,6 +36,7 @@ import {
   fetchDocumentPriorBills,
   fetchDocumentViewer,
   fetchDocumentsList,
+  patchDocumentDisplayName,
   patchDocumentSite,
   postAnomalyReview,
   postMaterializeAnomalyComparisons,
@@ -427,6 +428,13 @@ function DocumentPreview({ viewer }: { viewer: DocumentViewerResponse }) {
   );
 }
 
+function documentRowLabel(row: { display_name: string | null; document_id: string }): string {
+  if (row.display_name?.trim()) {
+    return row.display_name.trim();
+  }
+  return row.document_id.slice(0, 8) + "…";
+}
+
 function DocumentViewerPanel({
   headerDocumentId,
   viewer,
@@ -445,6 +453,12 @@ function DocumentViewerPanel({
   pipelineBusy,
   pipelineBusyLabel,
   sites,
+  displayNameValue,
+  onDisplayNameValueChange,
+  onApplyDisplayName,
+  onClearDisplayName,
+  displayNameBusy,
+  displayNameError,
   assignSiteValue,
   onAssignSiteValueChange,
   onApplySite,
@@ -477,6 +491,12 @@ function DocumentViewerPanel({
   pipelineBusy?: boolean;
   pipelineBusyLabel?: string;
   sites?: SiteResponse[];
+  displayNameValue?: string;
+  onDisplayNameValueChange?: (value: string) => void;
+  onApplyDisplayName?: () => void;
+  onClearDisplayName?: () => void;
+  displayNameBusy?: boolean;
+  displayNameError?: string | null;
   assignSiteValue?: string;
   onAssignSiteValueChange?: (siteId: string) => void;
   onApplySite?: () => void;
@@ -520,7 +540,11 @@ function DocumentViewerPanel({
       <div className={`doc-viewer-body${pipelineBusy ? " doc-viewer-body--dimmed" : ""}`}>
       <div className="doc-viewer-toolbar">
         <h2 className="doc-viewer-title-wrap">
-          Document
+          {viewer?.display_name?.trim() ? (
+            <span className="doc-viewer-display-name">{viewer.display_name.trim()}</span>
+          ) : (
+            "Document"
+          )}
           {headerDocumentId ? (
             <code className="header-doc-id" title="Document UUID">
               {headerDocumentId}
@@ -570,6 +594,46 @@ function DocumentViewerPanel({
             <DocumentPreview viewer={viewer} />
           </div>
           <dl className="kv doc-viewer-kv">
+            <dt>Name</dt>
+            <dd>
+              {onApplyDisplayName ? (
+                <div className="site-assign-inline doc-name-assign">
+                  <input
+                    type="text"
+                    className="doc-name-input"
+                    value={displayNameValue ?? ""}
+                    disabled={displayNameBusy}
+                    placeholder="Optional label"
+                    maxLength={255}
+                    onChange={(e) => onDisplayNameValueChange?.(e.target.value)}
+                    aria-label="Document display name"
+                  />
+                  <button
+                    type="button"
+                    className="secondary site-assign-btn"
+                    disabled={displayNameBusy}
+                    onClick={() => onApplyDisplayName()}
+                  >
+                    {displayNameBusy ? "Saving…" : "Save name"}
+                  </button>
+                  {onClearDisplayName ? (
+                    <button
+                      type="button"
+                      className="secondary site-assign-btn"
+                      disabled={displayNameBusy || !(viewer.display_name?.trim() || displayNameValue?.trim())}
+                      onClick={() => onClearDisplayName()}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+              ) : viewer.display_name?.trim() ? (
+                viewer.display_name.trim()
+              ) : (
+                "—"
+              )}
+              {displayNameError ? <p className="error site-assign-error">{displayNameError}</p> : null}
+            </dd>
             <dt>Document ID</dt>
             <dd>
               <code>{viewer.document_id}</code>
@@ -897,6 +961,8 @@ export function App() {
   const [siteCreateBusy, setSiteCreateBusy] = useState(false);
   const [siteCreateMessage, setSiteCreateMessage] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  /** Optional label sent with presigned-upload (blank = unset). */
+  const [uploadDisplayName, setUploadDisplayName] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState("");
   const [uploadPct, setUploadPct] = useState(0);
@@ -923,6 +989,9 @@ export function App() {
   const [assignSiteDraft, setAssignSiteDraft] = useState("");
   const [assignSiteBusy, setAssignSiteBusy] = useState(false);
   const [assignSiteError, setAssignSiteError] = useState<string | null>(null);
+  const [displayNameDraft, setDisplayNameDraft] = useState("");
+  const [displayNameBusy, setDisplayNameBusy] = useState(false);
+  const [displayNameError, setDisplayNameError] = useState<string | null>(null);
   const [priorBills, setPriorBills] = useState<BillResponse[] | undefined>(undefined);
   const [priorBillsLoading, setPriorBillsLoading] = useState(false);
   const [priorBillsError, setPriorBillsError] = useState<string | null>(null);
@@ -1156,6 +1225,11 @@ export function App() {
     setAssignSiteError(null);
   }, [documentViewer?.document_id, documentViewer?.site_id]);
 
+  useEffect(() => {
+    setDisplayNameDraft(documentViewer?.display_name ?? "");
+    setDisplayNameError(null);
+  }, [documentViewer?.document_id, documentViewer?.display_name]);
+
   /** Load prior bills when current bill has a site (§3a). */
   useEffect(() => {
     if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
@@ -1267,6 +1341,69 @@ export function App() {
     }
   }, [selectedDocId, orgId, apiBase, assignSiteDraft]);
 
+  const handleApplyDisplayName = useCallback(async () => {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
+      return;
+    }
+    setDisplayNameBusy(true);
+    setDisplayNameError(null);
+    try {
+      const trimmed = displayNameDraft.trim();
+      const updated = await patchDocumentDisplayName(
+        apiBase.trim(),
+        effectiveOrgId,
+        selectedDocId,
+        trimmed || null,
+      );
+      setDisplayNameDraft(updated.display_name ?? "");
+      setDocumentViewer((prev) =>
+        prev && prev.document_id === selectedDocId
+          ? { ...prev, display_name: updated.display_name }
+          : prev,
+      );
+      setDocRows((rows) =>
+        rows.map((r) =>
+          r.document_id === selectedDocId ? { ...r, display_name: updated.display_name } : r,
+        ),
+      );
+    } catch (e) {
+      setDisplayNameError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDisplayNameBusy(false);
+    }
+  }, [selectedDocId, effectiveOrgId, apiBase, displayNameDraft]);
+
+  const handleClearDisplayName = useCallback(async () => {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
+      return;
+    }
+    setDisplayNameBusy(true);
+    setDisplayNameError(null);
+    try {
+      const updated = await patchDocumentDisplayName(
+        apiBase.trim(),
+        effectiveOrgId,
+        selectedDocId,
+        null,
+      );
+      setDisplayNameDraft("");
+      setDocumentViewer((prev) =>
+        prev && prev.document_id === selectedDocId
+          ? { ...prev, display_name: updated.display_name }
+          : prev,
+      );
+      setDocRows((rows) =>
+        rows.map((r) =>
+          r.document_id === selectedDocId ? { ...r, display_name: updated.display_name } : r,
+        ),
+      );
+    } catch (e) {
+      setDisplayNameError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDisplayNameBusy(false);
+    }
+  }, [selectedDocId, effectiveOrgId, apiBase]);
+
   /** Clear pipeline overlay once extraction finished and fetches are idle. */
   useEffect(() => {
     if (!pipelineHold) {
@@ -1291,12 +1428,10 @@ export function App() {
     try {
       setPhase("presigning");
       setMessage("Requesting presigned upload…");
-      const presign = await presignUpload(
-        apiBase.trim(),
-        effectiveOrgId,
-        file,
-        selectedSiteId.trim() || null,
-      );
+      const presign = await presignUpload(apiBase.trim(), effectiveOrgId, file, {
+        siteId: selectedSiteId.trim() || null,
+        displayName: uploadDisplayName.trim() || null,
+      });
 
       setPhase("uploading");
       setMessage("Uploading to object storage…");
@@ -1314,7 +1449,7 @@ export function App() {
       setPhase("error");
       setMessage(e instanceof Error ? e.message : String(e));
     }
-  }, [apiBase, orgId, file, closeViewer, selectedSiteId]);
+  }, [apiBase, orgId, file, closeViewer, selectedSiteId, uploadDisplayName]);
 
   const loadDocumentList = useCallback(async () => {
     if (!apiBase.trim() || !effectiveOrgId) {
@@ -1662,6 +1797,12 @@ export function App() {
 
   const viewerSiteProps = {
     sites: siteRows,
+    displayNameValue: displayNameDraft,
+    onDisplayNameValueChange: setDisplayNameDraft,
+    onApplyDisplayName: () => void handleApplyDisplayName(),
+    onClearDisplayName: () => void handleClearDisplayName(),
+    displayNameBusy,
+    displayNameError,
     assignSiteValue: assignSiteDraft,
     onAssignSiteValueChange: setAssignSiteDraft,
     onApplySite: () => void handleApplySiteToDocument(),
@@ -1886,6 +2027,17 @@ export function App() {
                 Selected: <strong>{file.name}</strong> — {(file.size / 1024).toFixed(1)} KiB
               </p>
             ) : null}
+            <label className="upload-name-field">
+              <span className="upload-name-label">Document name (optional)</span>
+              <input
+                type="text"
+                className="doc-name-input"
+                value={uploadDisplayName}
+                maxLength={255}
+                placeholder="e.g. March 2026 — Main Street"
+                onChange={(e) => setUploadDisplayName(e.target.value)}
+              />
+            </label>
             <div className="actions">
               <button
                 type="button"
@@ -2006,6 +2158,7 @@ export function App() {
                 <table className="doc-table">
                   <thead>
                     <tr>
+                      <th>Name</th>
                       <th>Created</th>
                       <th>Status</th>
                       <th>Review</th>
@@ -2030,8 +2183,9 @@ export function App() {
                         }}
                         tabIndex={0}
                         role="button"
-                        aria-label={`Open document ${row.document_id}`}
+                        aria-label={`Open document ${documentRowLabel(row)}`}
                       >
+                        <td className="doc-table__name">{row.display_name?.trim() || "—"}</td>
                         <td>{new Date(row.created_at).toLocaleString()}</td>
                         <td>
                           <span className={statusPillClass(row.processing_status)}>{row.processing_status}</span>
@@ -2134,6 +2288,7 @@ export function App() {
                     <th>Grounding</th>
                     <th>Rule</th>
                     <th>Site</th>
+                    <th>Document name</th>
                     <th>Explanation</th>
                     <th>Summary</th>
                     <th>Review</th>
@@ -2165,7 +2320,7 @@ export function App() {
                       tabIndex={0}
                       role="button"
                       title={row.explainability.reasons.length ? row.explainability.reasons.join(" ") : undefined}
-                      aria-label={`Open document for anomaly ${row.id}`}
+                      aria-label={`Open document ${row.document_display_name?.trim() || row.document_id} for anomaly ${row.id}`}
                     >
                       <td>{new Date(row.updated_at).toLocaleString()}</td>
                       <td>
@@ -2183,6 +2338,9 @@ export function App() {
                       </td>
                       <td className="cell-mono">{row.rule_id}</td>
                       <td>{row.site_name ?? (row.site_id ? row.site_id : "—")}</td>
+                      <td className="doc-table__name" title={row.document_display_name ?? undefined}>
+                        {row.document_display_name?.trim() || "—"}
+                      </td>
                       <td className="anomaly-explanation-cell">{row.explainability.explanation}</td>
                       <td>{row.summary}</td>
                       <td>
