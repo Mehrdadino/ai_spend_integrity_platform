@@ -45,6 +45,40 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Copy-friendly: table cells and labels are selectable; controls stay click-only. */
+.page td,
+.page th,
+.page p,
+.page li,
+.page dd,
+.page dt,
+.page h1,
+.page h2,
+.page h3,
+.page h4,
+.page .hint,
+.page .anomaly-doc-group__title,
+.page .anomaly-doc-group__meta,
+.page .doc-viewer-display-name,
+.page .header-doc-id,
+.page .cell-mono,
+.page .cell-id,
+.page .cell-error,
+.page .anomaly-explanation-cell,
+.page .anomaly-note-cell {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.page button,
+.page .nav-btn,
+.page input,
+.page select,
+.page textarea {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .page {
   max-width: 40rem;
   margin: 0 auto;
@@ -727,6 +761,14 @@ body {
 
 .doc-table__row--selected {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.doc-table__row--static {
+  cursor: default;
+}
+
+.doc-table__row--static:hover {
+  background: inherit;
 }
 
 .doc-table-hint {

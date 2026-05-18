@@ -26,6 +26,7 @@ import {
   fetchOrganizationsList,
   type OrganizationResponse,
 } from "./lib/organizations";
+import { getSelectableTableRowProps } from "./lib/tableRowActivation";
 import { createSite, fetchSitesList, type SiteResponse } from "./lib/sites";
 import {
   completeUpload,
@@ -229,22 +230,6 @@ function reviewStatusLabel(status: string): string {
     default:
       return status;
   }
-}
-
-/** True when a table row click should not open the document viewer (action buttons, etc.). */
-function isAnomalyRowInteractiveTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) {
-    return false;
-  }
-  return Boolean(target.closest(".anomaly-actions-cell, button, a, select, textarea, input, label"));
-}
-
-/** Documents list: ignore clicks on action cells (e.g. link to anomalies inbox). */
-function isDocTableInteractiveTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) {
-    return false;
-  }
-  return Boolean(target.closest(".doc-table__action-cell, button, a, select, textarea, input, label"));
 }
 
 /** §5e: confirm transition with optional audit note before POST …/review. */
@@ -625,29 +610,15 @@ function AnomaliesGroupedInbox({
                     <Fragment key={row.id}>
                       <tr
                         className="doc-table__row"
-                        onClick={(e) => {
-                          if (isAnomalyRowInteractiveTarget(e.target)) {
-                            return;
-                          }
-                          onOpenDocument(row.document_id);
-                        }}
-                        onKeyDown={(ev) => {
-                          if (ev.key === "Enter" || ev.key === " ") {
-                            if (isAnomalyRowInteractiveTarget(ev.target)) {
-                              return;
-                            }
-                            ev.preventDefault();
-                            onOpenDocument(row.document_id);
-                          }
-                        }}
-                        tabIndex={0}
-                        role="button"
                         title={
                           row.explainability.reasons.length
                             ? row.explainability.reasons.join(" ")
                             : undefined
                         }
                         aria-label={`${row.title} — open ${anomalyDocumentLabel(group)}`}
+                        {...getSelectableTableRowProps(() => onOpenDocument(row.document_id), {
+                          extraInteractiveSelector: ".anomaly-actions-cell",
+                        })}
                       >
                         <td>{new Date(row.updated_at).toLocaleString()}</td>
                         <td>
@@ -1167,7 +1138,8 @@ function DocumentViewerPanel({
                 </p>
               ) : null}
               <p className="hint prior-bills-note">
-                Sorted by billing period (newest first). Click a row to open that bill&apos;s document.
+                Sorted by billing period (newest first). Click a row to open that bill; drag across text to highlight
+                and copy without opening.
               </p>
               {priorBills && priorBills.length > 0 ? (
                 <div className="table-wrap bill-table-wrap">
@@ -1190,24 +1162,14 @@ function DocumentViewerPanel({
                           <tr
                             key={pb.id}
                             className={`bill-table__row${isActive ? " bill-table__row--selected" : ""}${openPrior ? "" : " bill-table__row--static"}`}
-                            onClick={openPrior}
-                            onKeyDown={
-                              openPrior
-                                ? (ev) => {
-                                    if (ev.key === "Enter" || ev.key === " ") {
-                                      ev.preventDefault();
-                                      openPrior();
-                                    }
-                                  }
-                                : undefined
-                            }
-                            tabIndex={openPrior ? 0 : undefined}
-                            role={openPrior ? "button" : undefined}
                             aria-label={
                               openPrior
                                 ? `Open document for ${formatBillPeriod(pb)} bill`
                                 : undefined
                             }
+                            {...(openPrior
+                              ? getSelectableTableRowProps(openPrior)
+                              : {})}
                           >
                             <td className="cell-mono">{formatBillPeriod(pb)}</td>
                             <td>{pb.issuer_name ?? "—"}</td>
@@ -2475,8 +2437,8 @@ export function App() {
               </button>
             </div>
             <p className="doc-list-lede">
-              Newest first. Click a row to preview the file and review the extracted bill. Use{" "}
-              <strong>Signals</strong> to open this bill&apos;s saved comparison signals in the Anomalies tab.
+              Newest first. Click a row to preview the file and review the extracted bill; drag across text to copy
+              without opening. Use <strong>Signals</strong> for comparison signals in the Anomalies tab.
             </p>
             {docListError ? <p className="error">{docListError}</p> : null}
             {!docListError && !docListLoading && docRows.length === 0 ? (
@@ -2504,24 +2466,10 @@ export function App() {
                       <tr
                         key={row.document_id}
                         className={`doc-table__row${selectedDocId === row.document_id ? " doc-table__row--selected" : ""}`}
-                        onClick={(e) => {
-                          if (isDocTableInteractiveTarget(e.target)) {
-                            return;
-                          }
-                          openDocumentInViewer(row.document_id);
-                        }}
-                        onKeyDown={(ev) => {
-                          if (ev.key === "Enter" || ev.key === " ") {
-                            if (isDocTableInteractiveTarget(ev.target)) {
-                              return;
-                            }
-                            ev.preventDefault();
-                            openDocumentInViewer(row.document_id);
-                          }
-                        }}
-                        tabIndex={0}
-                        role="button"
                         aria-label={`Open document ${documentRowLabel(row)}`}
+                        {...getSelectableTableRowProps(() => openDocumentInViewer(row.document_id), {
+                          extraInteractiveSelector: ".doc-table__action-cell",
+                        })}
                       >
                         <td className="doc-table__name">{row.display_name?.trim() || "—"}</td>
                         <td>{new Date(row.created_at).toLocaleString()}</td>
@@ -2545,7 +2493,10 @@ export function App() {
                         <td>{row.source}</td>
                         <td className="cell-mono">{row.mime_type}</td>
                         <td>{formatBytes(row.byte_size)}</td>
-                        <td className="doc-table__action-cell">
+                        <td
+                          className="doc-table__action-cell"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <button
                             type="button"
                             className="doc-table__link-btn"
@@ -2621,11 +2572,10 @@ export function App() {
             </div>
           </div>
           <p className="doc-list-lede">
-            Signals are grouped by <strong>bill / document</strong> so you can see which upload each
-            row belongs to. Use <strong>Filter by bill</strong> (search name or UUID, paginated) or{" "}
-            <strong>View bill</strong> on a group to open the PDF and comparison panel.{" "}
-            <strong>Refresh</strong> runs comparison on
-            finished bills (optionally filtered by site under Connection).
+            Signals are grouped by <strong>bill / document</strong>. Click a signal row to open that bill;
+            drag across text to copy without opening. Use <strong>Filter by bill</strong> or{" "}
+            <strong>View bill</strong> on a group header. <strong>Refresh</strong> runs comparison on finished
+            bills (optionally filtered by site under Connection).
           </p>
           {anomalyListError ? <p className="error">{anomalyListError}</p> : null}
           {!anomalyListError && !anomalyListLoading && anomalyRows.length === 0 ? (
