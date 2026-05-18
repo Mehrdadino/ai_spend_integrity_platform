@@ -1,9 +1,8 @@
 """Enqueue §3e comparison backfill (separate small RQ jobs on the ``documents`` queue).
 
 After the document worker materializes a bill, we queue ``run_document_comparison_backfill_job``
-so ``anomalies`` rows exist without calling ``GET …/bill/comparison``. Site reassignment and
-document soft-delete may queue a **site-wide refresh** so remaining bills get priors that skip
-removed or reassigned neighbors.
+(bounded **site-wide** comparison when the bill has a ``site_id``). Site reassignment and
+document soft-delete may queue an additional **site-wide refresh** on the site the bill left.
 """
 
 from __future__ import annotations

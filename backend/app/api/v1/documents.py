@@ -407,10 +407,12 @@ def patch_document_site(
         status = 404 if "not found" in exc.detail.lower() else 400
         raise HTTPException(status_code=status, detail=exc.detail) from exc
     new_site_id = doc.site_id
-    # §3e: priors change for this bill and sometimes for neighbors on old/new sites.
+    # §3e: backfill refreshes the bill's current site; also refresh the site it left.
     background_tasks.add_task(enqueue_document_comparison_backfill_safe, doc.id)
-    if old_site_id is not None and new_site_id != old_site_id:
-        background_tasks.add_task(enqueue_site_comparison_refresh_safe, ctx.organization.id, old_site_id)
+    if old_site_id is not None and old_site_id != new_site_id:
+        background_tasks.add_task(
+            enqueue_site_comparison_refresh_safe, ctx.organization.id, old_site_id
+        )
     return PatchDocumentSiteResponse(document_id=doc.id, site_id=doc.site_id)
 
 

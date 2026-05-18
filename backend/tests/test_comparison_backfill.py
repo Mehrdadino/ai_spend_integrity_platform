@@ -14,7 +14,15 @@ class TestComparisonBackfillSelection(unittest.TestCase):
         d1 = uuid.uuid4()
         d2 = uuid.uuid4()
         ordered = [d0, d1, d2]  # newest first
-        self.assertEqual(document_ids_newest_through_anchor(ordered, d1), [d0, d1])
+        self.assertEqual(document_ids_newest_through_anchor(ordered, d1), [d0, d1, d2])
+
+    def test_anchor_mid_timeline_includes_immediate_older_neighbor(self) -> None:
+        """Inserting between newest and oldest shifts the older neighbor's prior to anchor."""
+        newest = uuid.uuid4()
+        anchor = uuid.uuid4()
+        oldest = uuid.uuid4()
+        ordered = [newest, anchor, oldest]
+        self.assertEqual(document_ids_newest_through_anchor(ordered, anchor), [newest, anchor, oldest])
 
     def test_anchor_newest_includes_previous_newest_neighbor(self) -> None:
         """Uploading the new top bill shifts the prior for the old newest row."""

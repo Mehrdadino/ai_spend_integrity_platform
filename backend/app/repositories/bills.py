@@ -118,6 +118,32 @@ def count_bills_newer_than_anchor(
     return int(session.scalar(stmt) or 0)
 
 
+def get_immediate_older_document_id_for_anchor(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    anchor: Bill,
+) -> Optional[uuid.UUID]:
+    """``document_id`` for the bill one step older than ``anchor`` in §3e site order (if any).
+
+    When a bill lands in the middle of history, this neighbor's immediate prior may change to
+    ``anchor``; it is not always included in the newest-through-anchor prefix.
+    """
+    if anchor.site_id is None:
+        return None
+    period_end = _bill_period_end_expr()
+    stmt = (
+        _site_bills_base_stmt(
+            organization_id=organization_id,
+            site_id=anchor.site_id,
+            period_end=period_end,
+        )
+        .where(_bill_is_older_than_current_filter(period_end, anchor))
+        .limit(1)
+    )
+    return session.scalar(stmt)
+
+
 def list_document_ids_newest_through_anchor(
     session: Session,
     *,
@@ -127,7 +153,8 @@ def list_document_ids_newest_through_anchor(
     """Document IDs needing §3d refresh after ``anchor`` lands (indexed SQL; no full-site load).
 
     When ``anchor`` is the newest bill, returns at most two IDs (anchor + former newest).
-  Otherwise returns the newest ``count(newer)+1`` bills (prefix through anchor).
+    Otherwise returns the newest ``count(newer)+1`` bills (prefix through anchor), plus the
+    bill immediately *older* than ``anchor`` when present (its prior may now be ``anchor``).
     """
     if anchor.site_id is None:
         return [anchor.document_id]
@@ -144,23 +171,30 @@ def list_document_ids_newest_through_anchor(
         ).limit(2)
         rows = list(session.scalars(stmt).all())
         if anchor.document_id in rows:
-            return rows
-        return [anchor.document_id] + [d for d in rows if d != anchor.document_id][:1]
-
-    limit = newer_count + 1
-    stmt = (
-        _site_bills_base_stmt(
-            organization_id=organization_id,
-            site_id=anchor.site_id,
-            period_end=period_end,
+            doc_ids = rows
+        else:
+            doc_ids = [anchor.document_id] + [d for d in rows if d != anchor.document_id][:1]
+    else:
+        limit = newer_count + 1
+        stmt = (
+            _site_bills_base_stmt(
+                organization_id=organization_id,
+                site_id=anchor.site_id,
+                period_end=period_end,
+            )
+            .where(_bill_not_older_than_anchor_filter(period_end, anchor))
+            .limit(limit)
         )
-        .where(_bill_not_older_than_anchor_filter(period_end, anchor))
-        .limit(limit)
+        doc_ids = list(session.scalars(stmt).all())
+        if anchor.document_id not in doc_ids:
+            # Anchor missing from prefix (data race) — still evaluate it once.
+            doc_ids = [anchor.document_id]
+
+    older_neighbor = get_immediate_older_document_id_for_anchor(
+        session, organization_id=organization_id, anchor=anchor
     )
-    doc_ids = list(session.scalars(stmt).all())
-    if anchor.document_id not in doc_ids:
-        # Anchor missing from prefix (data race) — still evaluate it once.
-        return [anchor.document_id]
+    if older_neighbor is not None and older_neighbor not in doc_ids:
+        doc_ids.append(older_neighbor)
     return doc_ids
 
 

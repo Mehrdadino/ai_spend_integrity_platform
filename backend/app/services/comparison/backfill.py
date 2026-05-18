@@ -4,9 +4,12 @@ When a normalized bill lands (worker) or a site assignment changes prior chains,
 ``anomalies`` must be recomputed so the inbox matches ``GET …/bill/comparison`` outcomes.
 
 **Site chain rule:** bills on the same ``site_id`` are ordered newest-first (see ``period``).
-After upserting the bill for document *D*, we re-run comparison for a prefix of that ordering
-through *D* and—when *D* is the **newest** row—also the **next** bill, because its immediate
-prior shifts when a new bill lands above it.
+After upserting a bill with a ``site_id``, we run a **bounded site-wide refresh** so every
+remaining bill gets the correct immediate prior (mid-timeline inserts, deletes, and reorders).
+Bills without a site still run single-document comparison only.
+
+``list_document_ids_newest_through_anchor`` remains for targeted repair/tests (prefix through
+anchor + immediate older neighbor).
 
 **Session handling:** each ``evaluate_document_comparison`` is followed by ``commit()`` so the
 ORM does not keep stale ``Anomaly`` rows across SQL ``DELETE`` + re-insert (avoids spurious
@@ -25,7 +28,6 @@ from app.config import get_settings
 from app.repositories.bills import (
     get_bill_for_org_document,
     iter_document_ids_for_site_keyset,
-    list_document_ids_newest_through_anchor,
 )
 from app.services.comparison.evaluate import evaluate_document_comparison
 from app.services.comparison.limits import DEFAULT_SITE_REFRESH_MAX_BILLS
@@ -56,8 +58,13 @@ def document_ids_newest_through_anchor(
         return [anchor_document_id]
 
     if idx == 0 and len(ids) > 1:
-        return list(ids[:2])
-    return list(ids[: idx + 1])
+        result = list(ids[:2])
+    else:
+        result = list(ids[: idx + 1])
+    # Bill immediately older than anchor: its prior may now be ``anchor`` (mid-timeline insert).
+    if idx + 1 < len(ids) and ids[idx + 1] not in result:
+        result.append(ids[idx + 1])
+    return result
 
 
 def run_document_comparison_backfill(
@@ -91,24 +98,13 @@ def run_document_comparison_backfill(
         session.commit()
         return [document_id]
 
-    # Indexed SQL: only bills whose prior chain may have changed (not capped at 500/2000).
-    _ = site_bill_scan_limit  # legacy RQ kwarg; ignored since §3e scale SQL path.
-    targets = list_document_ids_newest_through_anchor(
+    # Bounded full-site refresh: correct priors after mid-timeline inserts and neighbor shifts.
+    _ = site_bill_scan_limit  # legacy RQ kwarg; cap comes from settings in site-wide path.
+    return run_site_wide_comparison_refresh(
         session,
         organization_id=organization_id,
-        anchor=current,
+        site_id=current.site_id,
     )
-
-    touched: list[uuid.UUID] = []
-    for doc_id in targets:
-        evaluate_document_comparison(
-            session,
-            organization_id=organization_id,
-            document_id=doc_id,
-        )
-        session.commit()
-        touched.append(doc_id)
-    return touched
 
 
 def run_site_wide_comparison_refresh(
