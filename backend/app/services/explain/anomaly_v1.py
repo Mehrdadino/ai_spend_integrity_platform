@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
 
+from app.services.comparison.formatting import format_percent_from_float
+
 # Bumped when templates or confidence rules change materially (LLM polish would use a new suffix).
 EXPLAIN_TEMPLATE_VERSION = "explain-v1"
 
@@ -109,7 +111,8 @@ def _mom_total(ev: Mapping[str, Any], *, severity: str) -> ExplainabilityV1:
     tier, reasons = _tier_for_keys(("current_total", "prior_total", "delta_amount"), ev)
     pct_note = ""
     if pct_raw is not None and _non_empty_scalar(pct_raw):
-        pct_note = f" That is about {pct_raw}% of the prior bill total."
+        pct_display = format_percent_from_float(float(pct_raw))
+        pct_note = f" That is about {pct_display}% of the prior bill total."
     explanation = (
         f"We compared this bill’s header total ({cur} {cur_code}) to the immediate prior bill "
         f"at the same site ({prior} {cur_code}). The difference is {delta} {cur_code}.{pct_note} "
@@ -235,7 +238,10 @@ def _fees_high_share(ev: Mapping[str, Any]) -> ExplainabilityV1:
     pct = ev.get("fee_percent")
     cur = _get_str(ev, "currency")
     tier, reasons = _tier_for_keys(("fee_sum", "bill_total", "fee_percent"), ev)
-    pct_note = f" ({pct}% of the bill)" if pct is not None else ""
+    if pct is not None and _non_empty_scalar(pct):
+        pct_note = f" ({format_percent_from_float(float(pct))}% of the bill)"
+    else:
+        pct_note = ""
     explanation = (
         f"Fee lines on this bill add up to {fee_sum} {cur} against a total of {total} {cur}{pct_note}. "
         "High fee share is a common review target even without prior bills to compare."

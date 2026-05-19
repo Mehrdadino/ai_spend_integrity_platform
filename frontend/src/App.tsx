@@ -16,6 +16,8 @@ import { createPortal } from "react-dom";
 import { AnomalyDocumentFilter } from "./components/AnomalyDocumentFilter";
 import { AccountPage } from "./AccountPage";
 import { OrganizationTeamPanel } from "./components/OrganizationTeamPanel";
+import { PdfGeneratorPage } from "./components/PdfGeneratorPage";
+import { formatMoney } from "./lib/format";
 import { LoginPage } from "./LoginPage";
 import {
   clearSession,
@@ -64,7 +66,7 @@ import {
 } from "./lib/upload";
 
 type Phase = "idle" | "presigning" | "uploading" | "completing" | "done" | "error";
-type AppView = "upload" | "documents" | "anomalies" | "organizations" | "account";
+type AppView = "upload" | "documents" | "anomalies" | "organizations" | "account" | "pdf-generator";
 
 const defaultApiBase = "http://127.0.0.1:8000";
 
@@ -1002,7 +1004,7 @@ function DocumentViewerPanel({
                 <dt>Total</dt>
                 <dd>
                   {bill.total_amount != null && bill.total_amount !== undefined
-                    ? `${bill.total_amount} ${bill.currency}`
+                    ? formatMoney(bill.total_amount, bill.currency)
                     : "—"}
                 </dd>
                 <dt>Normalization</dt>
@@ -1066,7 +1068,7 @@ function DocumentViewerPanel({
                           <td className="cell-mono">
                             {li.quantity != null ? `${li.quantity} ${li.quantity_unit ?? ""}`.trim() : "—"}
                           </td>
-                          <td>{li.amount != null ? `${li.amount} ${li.currency}` : "—"}</td>
+                          <td>{li.amount != null ? formatMoney(li.amount, li.currency) : "—"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1180,7 +1182,7 @@ function DocumentViewerPanel({
                           >
                             <td className="cell-mono">{formatBillPeriod(pb)}</td>
                             <td>{pb.issuer_name ?? "—"}</td>
-                            <td>{pb.total_amount != null ? `${pb.total_amount} ${pb.currency}` : "—"}</td>
+                            <td>{pb.total_amount != null ? formatMoney(pb.total_amount, pb.currency) : "—"}</td>
                             <td>{new Date(pb.created_at).toLocaleDateString()}</td>
                           </tr>
                         );
@@ -2180,7 +2182,9 @@ export function App() {
           ? "Anomaly inbox"
           : view === "account"
             ? "Account settings"
-            : "Organizations";
+            : view === "pdf-generator"
+              ? "PDF Generator"
+              : "Organizations";
 
   const currentPageSubtitle =
     view === "upload"
@@ -2191,7 +2195,9 @@ export function App() {
           ? "Saved comparison signals across your organization. Use filters to narrow by bill or review status."
           : view === "account"
             ? "Update your login email and password."
-            : "Create and manage organizations, sites, and team members.";
+            : view === "pdf-generator"
+              ? "Generate synthetic utility bills with embedded text for pipeline testing. Bills are created entirely in the browser — no API call needed."
+              : "Create and manage organizations, sites, and team members.";
 
   return (
     <div className="app-shell">
@@ -2258,6 +2264,24 @@ export function App() {
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
             <span>Account</span>
           </button>
+
+          {/* Admin-only section */}
+          {platformAdmin && (
+            <>
+              <div className="sidebar-nav__divider" role="separator" aria-label="Admin tools" />
+              <button
+                type="button"
+                className={`sidebar-nav__item sidebar-nav__item--admin${view === "pdf-generator" ? " active" : ""}`}
+                onClick={() => setView("pdf-generator")}
+                aria-current={view === "pdf-generator" ? "page" : undefined}
+              >
+                {/* Sparkle / wand icon */}
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17 5.8 21.3l2.4-7.4L2 9.4h7.6z"/></svg>
+                <span>PDF Generator</span>
+                <span className="sidebar-nav__admin-badge">Admin</span>
+              </button>
+            </>
+          )}
         </nav>
 
         {/* Org + site context selectors */}
@@ -2882,6 +2906,9 @@ export function App() {
               user={authUser}
               onUserUpdated={(u) => setAuthUser(u)}
             />
+          ) : null}
+          {view === "pdf-generator" && platformAdmin ? (
+            <PdfGeneratorPage />
           ) : null}
         </div>{/* end .app-content */}
 

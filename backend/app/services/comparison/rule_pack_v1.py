@@ -23,11 +23,8 @@ from app.services.comparison.rules_config import (
     MOM_PERCENT_WARNING,
     RULE_PACK_VERSION,
 )
+from app.services.comparison.formatting import format_money, format_percent
 from app.services.comparison.single_bill_integrity import evaluate_single_bill_integrity
-
-
-def _decimal_str(value: Decimal) -> str:
-    return format(value, "f")
 
 
 def _finding(
@@ -85,20 +82,20 @@ def _check_mom_total(current: Bill, prior: Bill) -> ComparisonFindingResponse | 
     if prior_total > 0:
         pct = (delta / prior_total) * Decimal("100")
     direction = "increased" if delta > 0 else "decreased"
-    pct_part = f" ({_decimal_str(abs(pct))}%)" if pct is not None else ""
+    pct_part = f" ({format_percent(abs(pct))}%)" if pct is not None else ""
     return _finding(
         rule_id="mom_total_change",
         severity=severity,
         title="Month-over-month total change",
         summary=(
-            f"Bill total {direction} by {_decimal_str(abs(delta))} {current.currency}"
+            f"Bill total {direction} by {format_money(abs(delta))} {current.currency}"
             f"{pct_part} vs the prior period."
         ),
         evidence={
-            "current_total": _decimal_str(current.total_amount),
-            "prior_total": _decimal_str(prior.total_amount),
-            "delta_amount": _decimal_str(delta),
-            "delta_percent": float(pct) if pct is not None else None,
+            "current_total": format_money(current.total_amount),
+            "prior_total": format_money(prior.total_amount),
+            "delta_amount": format_money(delta),
+            "delta_percent": float(format_percent(pct)) if pct is not None else None,
             "currency": current.currency,
             "prior_bill_id": str(prior.id),
             "prior_period_end": effective_period_end(prior).isoformat(),
@@ -120,14 +117,14 @@ def _check_header_total_mismatch(current: Bill) -> ComparisonFindingResponse | N
         severity="warning",
         title="Header total does not match line items",
         summary=(
-            f"Bill header total ({_decimal_str(current.total_amount)} {current.currency}) "
-            f"differs from the sum of line amounts ({_decimal_str(lines_sum)} {current.currency}) "
-            f"by {_decimal_str(diff)}."
+            f"Bill header total ({format_money(current.total_amount)} {current.currency}) "
+            f"differs from the sum of line amounts ({format_money(lines_sum)} {current.currency}) "
+            f"by {format_money(diff)}."
         ),
         evidence={
-            "header_total": _decimal_str(current.total_amount),
-            "lines_sum": _decimal_str(lines_sum),
-            "difference": _decimal_str(diff),
+            "header_total": format_money(current.total_amount),
+            "lines_sum": format_money(lines_sum),
+            "difference": format_money(diff),
             "currency": current.currency,
         },
     )
@@ -146,7 +143,7 @@ def _check_new_fee_lines(current: Bill, prior: Bill) -> ComparisonFindingRespons
             {
                 "line_item_id": str(li.id),
                 "raw_label": li.raw_label,
-                "amount": _decimal_str(li.amount) if li.amount is not None else None,
+                "amount": format_money(li.amount) if li.amount is not None else None,
                 "currency": li.currency,
                 "fingerprint": fp,
             }

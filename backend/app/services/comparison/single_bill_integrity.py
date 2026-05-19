@@ -17,6 +17,7 @@ from app.models.bill import Bill
 from app.models.bill_line_item import BillLineItem
 from app.schemas.comparison import ComparisonFindingResponse, ComparisonSeverity
 from app.services.comparison.line_match import line_fingerprint
+from app.services.comparison.formatting import format_money, format_percent
 from app.services.comparison.rules_config import (
     FEES_SHARE_MIN_TOTAL,
     FEES_SHARE_WARNING_PCT,
@@ -24,10 +25,6 @@ from app.services.comparison.rules_config import (
 )
 
 _PENALTY_RE = re.compile(PENALTY_FEE_LABEL_PATTERN, re.IGNORECASE)
-
-
-def _decimal_str(value: Decimal) -> str:
-    return format(value, "f")
 
 
 def _finding(
@@ -80,7 +77,7 @@ def _check_duplicate_line_fingerprints(
         {
             "fingerprint": fp,
             "count": n,
-            "combined_amount": _decimal_str(amounts[fp]),
+            "combined_amount": format_money(amounts[fp]),
             "raw_label": labels.get(fp, ""),
         }
         for fp, n in dupes[:10]
@@ -116,14 +113,14 @@ def _check_fees_share_of_total(current: Bill) -> ComparisonFindingResponse | Non
         severity="warning",
         title="Fees are a large share of this bill",
         summary=(
-            f"Fee lines sum to {_decimal_str(fee_sum)} {current.currency} "
-            f"({_decimal_str(pct)}% of the bill total {_decimal_str(current.total_amount)} {current.currency}). "
+            f"Fee lines sum to {format_money(fee_sum)} {current.currency} "
+            f"({format_percent(pct)}% of the bill total {format_money(current.total_amount)} {current.currency}). "
             "Review riders, surcharges, and one-time fees."
         ),
         evidence={
-            "fee_sum": _decimal_str(fee_sum),
-            "bill_total": _decimal_str(current.total_amount),
-            "fee_percent": float(pct),
+            "fee_sum": format_money(fee_sum),
+            "bill_total": format_money(current.total_amount),
+            "fee_percent": float(format_percent(pct)),
             "currency": current.currency,
         },
     )
@@ -141,7 +138,7 @@ def _check_penalty_style_fees(lines: Sequence[BillLineItem], *, currency: str) -
             {
                 "line_item_id": str(li.id),
                 "raw_label": li.raw_label,
-                "amount": _decimal_str(li.amount) if li.amount is not None else None,
+                "amount": format_money(li.amount) if li.amount is not None else None,
             }
         )
     if not hits:
@@ -194,13 +191,13 @@ def _check_credits_exceed_positive_charges(lines: Sequence[BillLineItem], *, cur
         severity="warning",
         title="Credits exceed other charges on this bill",
         summary=(
-            f"Credits total {_decimal_str(credit_sum)} {currency} vs "
-            f"{_decimal_str(charge_sum)} {currency} in other positive lines. "
+            f"Credits total {format_money(credit_sum)} {currency} vs "
+            f"{format_money(charge_sum)} {currency} in other positive lines. "
             "Confirm this is a net credit or adjustment bill."
         ),
         evidence={
-            "credit_sum": _decimal_str(credit_sum),
-            "positive_non_credit_sum": _decimal_str(charge_sum),
+            "credit_sum": format_money(credit_sum),
+            "positive_non_credit_sum": format_money(charge_sum),
             "currency": currency,
         },
     )
