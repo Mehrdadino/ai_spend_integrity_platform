@@ -25,6 +25,7 @@ UserRole = PlatformRole
 
 if TYPE_CHECKING:
     from app.models.anomaly_review_event import AnomalyReviewEvent
+    from app.models.auth_challenge import AuthChallenge
     from app.models.organization import Organization
 
 
@@ -58,4 +59,9 @@ class User(Base):
         "Organization",
         back_populates="created_by",
         foreign_keys="Organization.created_by_user_id",
+    )
+    auth_challenges: Mapped[list["AuthChallenge"]] = relationship(
+        "AuthChallenge",
+        back_populates="user",
+        cascade="all, delete-orphan",
     )

@@ -5,6 +5,7 @@ Imported by Alembic so ``Base.metadata`` contains all tables, including
 ``anomalies`` / ``anomaly_review_events`` (§3d / §5).
 """
 
+from app.models.auth_challenge import AuthChallenge
 from app.models.anomaly import Anomaly
 from app.models.anomaly_review_event import AnomalyReviewEvent
 from app.models.bill import Bill
@@ -16,6 +17,7 @@ from app.models.site import Site
 from app.models.user import User
 
 __all__ = [
+    "AuthChallenge",
     "Anomaly",
     "AnomalyReviewEvent",
     "Bill",

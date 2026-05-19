@@ -30,16 +30,23 @@ def create_access_token(
     user_id: uuid.UUID,
     role: str,
     email: str,
+    remember_device: bool = False,
 ) -> str:
     """Mint a signed JWT for ``Authorization: Bearer`` clients."""
     settings = get_settings()
+    ttl_minutes = (
+        settings.jwt_remember_expire_minutes
+        if remember_device
+        else settings.jwt_session_expire_minutes
+    )
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "role": role,
         "email": email,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=settings.jwt_expire_minutes)).timestamp()),
+        "exp": int((now + timedelta(minutes=ttl_minutes)).timestamp()),
+        "rem": remember_device,
     }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 

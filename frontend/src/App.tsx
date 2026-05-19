@@ -14,6 +14,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { AnomalyDocumentFilter } from "./components/AnomalyDocumentFilter";
+import { AccountPage } from "./AccountPage";
 import { LoginPage } from "./LoginPage";
 import {
   clearSession,
@@ -57,7 +58,7 @@ import {
 } from "./lib/upload";
 
 type Phase = "idle" | "presigning" | "uploading" | "completing" | "done" | "error";
-type AppView = "upload" | "documents" | "anomalies" | "organizations";
+type AppView = "upload" | "documents" | "anomalies" | "organizations" | "account";
 
 const defaultApiBase = "http://127.0.0.1:8000";
 
@@ -1965,6 +1966,11 @@ export function App() {
     closeViewer();
   }, [closeViewer]);
 
+  const goToAccount = useCallback(() => {
+    setView("account");
+    closeViewer();
+  }, [closeViewer]);
+
   const openDocumentInViewer = useCallback((documentId: string) => {
     setSelectedDocId(documentId);
     replaceDocQuery(documentId);
@@ -2043,7 +2049,9 @@ export function App() {
   const pageClass =
     view === "documents" || view === "organizations" || view === "anomalies"
       ? "page page--wide"
-      : "page";
+      : view === "account"
+        ? "page page--account"
+        : "page";
   const pageWideWithViewer =
     view === "documents" &&
     (selectedDocId !== null ||
@@ -2110,10 +2118,16 @@ export function App() {
         : undefined,
   };
 
+  const resetTokenFromUrl =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("reset_token")
+      : null;
+
   if (!authUser) {
     return (
       <LoginPage
         initialApiBase={apiBase}
+        resetToken={resetTokenFromUrl}
         onSignedIn={(user, base) => {
           setAuthUser(user);
           setApiBase(base);
@@ -2162,6 +2176,14 @@ export function App() {
           >
             Organizations
           </button>
+          <button
+            type="button"
+            className={view === "account" ? "nav-btn nav-btn--active" : "nav-btn"}
+            onClick={goToAccount}
+            aria-current={view === "account" ? "page" : undefined}
+          >
+            Account
+          </button>
         </nav>
         <h1 className="app-title">
           {view === "upload"
@@ -2170,7 +2192,9 @@ export function App() {
               ? "Your documents"
               : view === "anomalies"
                 ? "Anomaly inbox"
-                : "Organizations"}
+                : view === "account"
+                  ? "Account"
+                  : "Organizations"}
         </h1>
         <p className="lede">
           {view === "upload"
@@ -2179,7 +2203,9 @@ export function App() {
               ? "Track processing, open the PDF and extracted bill, assign a site, and see insights next to prior months."
               : view === "anomalies"
                 ? "Saved comparison signals across your organization. Open a document from a row to review the bill context. Pick a site under Connection to narrow the list."
-                : "Create organizations you own (members) or manage all tenants (platform admin)."}
+                : view === "account"
+                  ? "Update your login email and password."
+                  : "Create organizations you own (members) or manage all tenants (platform admin)."}
         </p>
       </header>
 
@@ -2195,6 +2221,9 @@ export function App() {
             Signed in as <strong>{authUser.email}</strong>
             {platformAdmin ? " (platform admin)" : " (member)"}
           </p>
+          <button type="button" className="secondary" onClick={goToAccount}>
+            Account settings
+          </button>
           <button
             type="button"
             className="secondary"
@@ -2701,6 +2730,13 @@ export function App() {
           </section>
         </>
       )}
+      {view === "account" && authUser ? (
+        <AccountPage
+          apiBase={apiBase}
+          user={authUser}
+          onUserUpdated={(u) => setAuthUser(u)}
+        />
+      ) : null}
       {pendingReview
         ? createPortal(
             <ReviewTransitionModal

@@ -1649,3 +1649,80 @@ button.btn-danger:hover:not(:disabled) {
 .login-card {
   margin-top: 0;
 }
+
+.login-card .success {
+  margin: 0 0 0.75rem;
+  color: var(--color-success, #0d7a4a);
+  font-size: 0.9rem;
+}
+
+.auth-links {
+  margin: 1rem 0 0;
+  text-align: center;
+  font-size: 0.875rem;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-accent, #2563eb);
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+
+.link-btn:hover {
+  opacity: 0.85;
+}
+
+.field--checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.field--checkbox input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.page--account {
+  max-width: 36rem;
+}
+
+.account-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.account-card {
+  margin-top: 0;
+}
+
+.connection-auth-signed-in {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.password-policy {
+  margin: 0.25rem 0 0.75rem;
+}
+
+.password-policy__summary {
+  margin: 0 0 0.35rem;
+}
+
+.password-policy__issues {
+  margin: 0;
+  padding-left: 1.15rem;
+  color: var(--color-warning, #b45309);
+  font-size: 0.875rem;
+}
+
+.password-policy__issues li {
+  margin: 0.15rem 0;
+}

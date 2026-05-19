@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from app.config import get_settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.models import (  # noqa: E402, F401
+    AuthChallenge,
     Anomaly,
     AnomalyReviewEvent,
     Bill,

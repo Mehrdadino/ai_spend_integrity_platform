@@ -40,3 +40,17 @@ def create_user(
     session.add(user)
     session.flush()
     return user
+
+
+def update_user_email(session: Session, user: User, *, email: str) -> User:
+    """Set login email (caller must ensure uniqueness and ``commit``)."""
+    user.email = email.strip().lower()
+    session.flush()
+    return user
+
+
+def update_user_password_hash(session: Session, user: User, *, password_hash: str) -> User:
+    """Replace bcrypt hash (caller must ``commit``)."""
+    user.password_hash = password_hash
+    session.flush()
+    return user

@@ -64,8 +64,23 @@ class Settings(BaseSettings):
     # Set ``auth_allow_dev_org_header=true`` to keep ``X-Organization-Id`` for scripts/CI.
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24 * 7
+    # JWT lifetime: short session vs 30-day "remember this device" (login checkbox).
+    jwt_session_expire_minutes: int = 12 * 60
+    jwt_remember_expire_minutes: int = 30 * 24 * 60
     auth_allow_dev_org_header: bool = True
+    # Sign-up, email 2FA, and password reset (P1 extension).
+    auth_allow_registration: bool = True
+    auth_otp_expire_minutes: int = 10
+    auth_reset_expire_minutes: int = 60
+    # Base URL for links in password-reset emails (Vite dev server by default).
+    auth_frontend_base_url: str = "http://127.0.0.1:5173"
+    # SMTP: leave host empty to log auth emails to the API process (local dev).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = "noreply@spend-integrity.local"
+    smtp_use_tls: bool = True
 
     # P3 org bootstrap: when set, ``GET/POST /organizations`` require this header value.
     org_bootstrap_token: str = ""

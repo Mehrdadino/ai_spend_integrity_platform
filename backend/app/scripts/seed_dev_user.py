@@ -3,7 +3,7 @@
 Default credentials (override via env):
 
 - ``DEV_ADMIN_EMAIL`` (default ``admin@dev.local``)
-- ``DEV_ADMIN_PASSWORD`` (default ``dev-admin-change-me``)
+- ``DEV_ADMIN_PASSWORD`` (default ``Dev-Admin-Change1!``)
 
 Run from ``backend/``::
 
@@ -22,7 +22,7 @@ from app.services.auth import hash_password
 
 def main() -> None:
     email = os.environ.get("DEV_ADMIN_EMAIL", "admin@dev.local").strip().lower()
-    password = os.environ.get("DEV_ADMIN_PASSWORD", "dev-admin-change-me")
+    password = os.environ.get("DEV_ADMIN_PASSWORD", "Dev-Admin-Change1!")
     factory = get_session_factory()
     session = factory()
     try:
