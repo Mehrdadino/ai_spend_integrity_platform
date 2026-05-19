@@ -2072,23 +2072,6 @@ export function App() {
     }
   }, [selectedDocId, orgId, apiBase, documentViewer?.document_id, closeViewer, view, loadDocumentList]);
 
-  const pageClass =
-    view === "documents" || view === "organizations" || view === "anomalies"
-      ? "page page--wide"
-      : view === "account"
-        ? "page page--account"
-        : "page";
-  const pageWideWithViewer =
-    view === "documents" &&
-    (selectedDocId !== null ||
-      viewerLoading ||
-      viewerError ||
-      billLoading ||
-      billError ||
-      documentBill !== null ||
-      reprocessBusy ||
-      !!reprocessError);
-
   const pipelineStatusBusy =
     !!documentViewer &&
     PIPELINE_BUSY_STATUSES.has(documentViewer.processing_status);
@@ -2184,139 +2167,125 @@ export function App() {
     );
   }
 
+  /** Derived labels for topbar and context badge. */
+  const activeOrgName  = orgRows.find((o) => o.id === effectiveOrgId)?.name;
+  const activeSiteName = siteRows.find((s) => s.id === selectedSiteId)?.name;
+
+  const currentPageTitle =
+    view === "upload"
+      ? "Upload a bill"
+      : view === "documents"
+        ? "Documents"
+        : view === "anomalies"
+          ? "Anomaly inbox"
+          : view === "account"
+            ? "Account settings"
+            : "Organizations";
+
+  const currentPageSubtitle =
+    view === "upload"
+      ? "Add a PDF utility bill — we extract line items, compare month-over-month, and highlight anything worth a second look."
+      : view === "documents"
+        ? "Track processing, open the PDF and extracted bill, assign a site, and see comparison insights alongside prior months."
+        : view === "anomalies"
+          ? "Saved comparison signals across your organization. Use filters to narrow by bill or review status."
+          : view === "account"
+            ? "Update your login email and password."
+            : "Create and manage organizations, sites, and team members.";
+
   return (
-    <div className={`${pageClass}${pageWideWithViewer ? " page--viewer" : ""}`}>
-      <header className="app-header">
-        <div className="app-brand" aria-hidden="true">
-          <span className="app-brand-mark">Spend Integrity</span>
-          <span className="app-brand-tagline">Utility bill intelligence</span>
+    <div className="app-shell">
+      {/* ══════ Sidebar ══════ */}
+      <aside className="app-sidebar">
+        {/* Brand lockup */}
+        <div className="sidebar-brand">
+          <div className="sidebar-brand__icon" aria-hidden="true">SI</div>
+          <div className="sidebar-brand__info">
+            <span className="sidebar-brand__name">Spend Integrity</span>
+            <span className="sidebar-brand__tagline">Utility bill intelligence</span>
+          </div>
         </div>
-        <nav className="app-nav" aria-label="Primary">
+
+        {/* Primary navigation */}
+        <nav className="sidebar-nav" aria-label="Primary navigation">
           <button
             type="button"
-            className={view === "upload" ? "nav-btn nav-btn--active" : "nav-btn"}
+            className={`sidebar-nav__item${view === "upload" ? " active" : ""}`}
             onClick={goToUpload}
             aria-current={view === "upload" ? "page" : undefined}
           >
-            Upload
+            {/* Upload icon */}
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span>Upload</span>
           </button>
           <button
             type="button"
-            className={view === "documents" ? "nav-btn nav-btn--active" : "nav-btn"}
+            className={`sidebar-nav__item${view === "documents" ? " active" : ""}`}
             onClick={() => void goToDocuments()}
             aria-current={view === "documents" ? "page" : undefined}
           >
-            Documents
+            {/* Documents icon */}
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            <span>Documents</span>
           </button>
           <button
             type="button"
-            className={view === "anomalies" ? "nav-btn nav-btn--active" : "nav-btn"}
+            className={`sidebar-nav__item${view === "anomalies" ? " active" : ""}`}
             onClick={() => goToAnomalies()}
             aria-current={view === "anomalies" ? "page" : undefined}
           >
-            Anomalies
+            {/* Anomalies / alert icon */}
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>Anomalies</span>
           </button>
           <button
             type="button"
-            className={view === "organizations" ? "nav-btn nav-btn--active" : "nav-btn"}
+            className={`sidebar-nav__item${view === "organizations" ? " active" : ""}`}
             onClick={() => void goToOrganizations()}
             aria-current={view === "organizations" ? "page" : undefined}
           >
-            Organizations
+            {/* Organizations / building icon */}
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+            <span>Organizations</span>
           </button>
           <button
             type="button"
-            className={view === "account" ? "nav-btn nav-btn--active" : "nav-btn"}
+            className={`sidebar-nav__item${view === "account" ? " active" : ""}`}
             onClick={goToAccount}
             aria-current={view === "account" ? "page" : undefined}
           >
-            Account
+            {/* Account / user icon */}
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <span>Account</span>
           </button>
         </nav>
-        <h1 className="app-title">
-          {view === "upload"
-            ? "Upload a bill"
-            : view === "documents"
-              ? "Your documents"
-              : view === "anomalies"
-                ? "Anomaly inbox"
-                : view === "account"
-                  ? "Account"
-                  : "Organizations"}
-        </h1>
-        <p className="lede">
-          {view === "upload"
-            ? "Add a PDF utility bill — we extract line items, compare to last month at the same site, and highlight anything worth a second look."
-            : view === "documents"
-              ? "Track processing, open the PDF and extracted bill, assign a site, and see insights next to prior months."
-              : view === "anomalies"
-                ? "Saved comparison signals across your organization. Open a document from a row to review the bill context. Pick a site under Connection to narrow the list."
-                : view === "account"
-                  ? "Update your login email and password."
-                  : "Create organizations you own (members) or manage all tenants (platform admin)."}
-        </p>
-      </header>
 
-      <section className="card">
-        <h2>Connection</h2>
-        <p className="card-subtitle">
-          {platformAdmin
-            ? "Platform admin: choose any organization to work in."
-            : "Pick an organization you created to upload bills and view documents."}
-        </p>
-        <div className="connection-auth-signed-in">
-          <p className="hint">
-            Signed in as <strong>{authUser.email}</strong>
-            {platformAdmin ? " (platform admin)" : ""}
-            {activeOrgRole && effectiveOrgId ? ` · org role: ${activeOrgRole}` : ""}
-          </p>
-          <button type="button" className="secondary" onClick={goToAccount}>
-            Account settings
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => {
-              clearSession();
-              setAuthUser(null);
-              setOrgId("");
-              setOrgRows([]);
-            }}
-          >
-            Sign out
-          </button>
-        </div>
-        <label className="field">
-          <span>Active organization</span>
-          <select
-            value={orgId}
-            disabled={orgListLoading || orgRows.length === 0}
-            onChange={(e) => setOrgId(e.target.value)}
-          >
-            <option value="">
-              {orgRows.length === 0 ? "— Create an organization first —" : "— Select organization —"}
-            </option>
-            {orgRows.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.name} ({o.slug})
-              </option>
-            ))}
-          </select>
-        </label>
-        {orgListError ? <p className="error">{orgListError}</p> : null}
-        <button type="button" className="secondary" disabled={orgListLoading} onClick={() => void loadOrganizationsList()}>
-          {orgListLoading ? "Refreshing…" : "Refresh organizations"}
-        </button>
-        <div className="connection-sites">
-          <h3 className="connection-sites-title">Site (location)</h3>
-          <p className="hint">
-            Bills for the <strong>same site</strong> are compared over time. Pick a site before uploading; assign it on old
-            bills in the document viewer.
-          </p>
-          {siteListError ? <p className="error">{siteListError}</p> : null}
-          <label className="field">
-            <span>Site for uploads</span>
+        {/* Org + site context selectors */}
+        <div className="sidebar-context">
+          <div className="sidebar-context__section">
+            <span className="sidebar-context__label">Organization</span>
             <select
+              className="sidebar-context__select"
+              value={orgId}
+              disabled={orgListLoading || orgRows.length === 0}
+              onChange={(e) => setOrgId(e.target.value)}
+              aria-label="Active organization"
+            >
+              <option value="">
+                {orgRows.length === 0 ? "— No organizations —" : "— Select organization —"}
+              </option>
+              {orgRows.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+            {orgListError ? <p className="sidebar-context__error">{orgListError}</p> : null}
+          </div>
+          <div className="sidebar-context__section">
+            <span className="sidebar-context__label">Site (location)</span>
+            <select
+              className="sidebar-context__select"
               value={selectedSiteId}
               disabled={!isUuid(effectiveOrgId) || siteListLoading || siteRows.length === 0}
               onChange={(e) => {
@@ -2326,9 +2295,10 @@ export function App() {
                   storeSiteIdForOrg(effectiveOrgId, v);
                 }
               }}
+              aria-label="Active site"
             >
               <option value="">
-                {siteRows.length === 0 ? "— Create a site below —" : "— Select site —"}
+                {siteRows.length === 0 ? "— No sites —" : "— Select site —"}
               </option>
               {siteRows.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -2336,39 +2306,78 @@ export function App() {
                 </option>
               ))}
             </select>
-          </label>
-          <div className="connection-sites-create">
-            <label className="field field--inline">
-              <span>New site name</span>
-              <input
-                value={newSiteName}
-                onChange={(e) => setNewSiteName(e.target.value)}
-                placeholder="Seattle"
-                disabled={!isUuid(effectiveOrgId)}
-              />
-            </label>
+            {siteListError ? <p className="sidebar-context__error">{siteListError}</p> : null}
+          </div>
+        </div>
+
+        {/* User info + quick actions */}
+        <div className="sidebar-user">
+          <div className="sidebar-user__info">
+            <div className="sidebar-user__avatar" aria-hidden="true">
+              {authUser.email[0].toUpperCase()}
+            </div>
+            <div className="sidebar-user__details">
+              <span className="sidebar-user__email" title={authUser.email}>
+                {authUser.email}
+              </span>
+              <span className="sidebar-user__role">
+                {platformAdmin
+                  ? "Platform admin"
+                  : activeOrgRole
+                    ? activeOrgRole.replace("_", " ")
+                    : "No org selected"}
+              </span>
+            </div>
+          </div>
+          <div className="sidebar-user__actions">
             <button
               type="button"
-              className="secondary"
-              disabled={!canManageActiveOrg || siteCreateBusy}
-              onClick={() => void handleCreateSite()}
+              className="sidebar-user__btn"
+              title="Account settings"
+              onClick={goToAccount}
             >
-              {siteCreateBusy ? "Creating…" : "Create site"}
+              {/* Settings icon */}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
             </button>
             <button
               type="button"
-              className="secondary"
-              disabled={!isUuid(effectiveOrgId) || siteListLoading}
-              onClick={() => void loadSitesList()}
+              className="sidebar-user__btn sidebar-user__btn--danger"
+              title="Sign out"
+              onClick={() => {
+                clearSession();
+                setAuthUser(null);
+                setOrgId("");
+                setOrgRows([]);
+              }}
             >
-              Refresh sites
+              {/* Sign-out icon */}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
             </button>
           </div>
-          {siteCreateMessage ? <p className="hint">{siteCreateMessage}</p> : null}
         </div>
-      </section>
+      </aside>
 
-      {view === "upload" && (
+      {/* ══════ Main content ══════ */}
+      <main className="app-main">
+        {/* Top bar: page title, subtitle, and context badge */}
+        <div className="app-topbar">
+          <div className="app-topbar__heading">
+            <h1 className="app-topbar__title">{currentPageTitle}</h1>
+            <p className="app-topbar__subtitle">{currentPageSubtitle}</p>
+          </div>
+          {(activeOrgName || activeSiteName) ? (
+            <div className="app-topbar__context">
+              <span className="context-badge">
+                {activeOrgName ?? "No org"}
+                {activeSiteName ? ` · ${activeSiteName}` : ""}
+              </span>
+            </div>
+          ) : null}
+        </div>
+
+        {/* Per-view content */}
+        <div className="app-content">
+          {view === "upload" && (
         <>
           <section className="card">
             <h2>Send your file</h2>
@@ -2378,7 +2387,7 @@ export function App() {
                 Uploads will use site: <strong>{siteRows.find((s) => s.id === selectedSiteId)?.name}</strong>
               </p>
             ) : (
-              <p className="hint">Select or create a site under Connection so bills can be compared by location.</p>
+              <p className="hint">Select a site in the sidebar so bills can be compared by location.</p>
             )}
             <input
               type="file"
@@ -2446,7 +2455,7 @@ export function App() {
                 </p>
               ) : (
                 <p className="hint upload-baseline-note">
-                  Assign a <strong>site</strong> on the document (or pick one under Connection before the next upload)
+                  Assign a <strong>site</strong> on the document (or pick one in the sidebar before the next upload)
                   so bills at the same location can be compared over time.
                 </p>
               )}
@@ -2743,7 +2752,7 @@ export function App() {
                 {orgListLoading ? "Loading…" : "Refresh"}
               </button>
             </div>
-            <p className="doc-list-lede">Copy a UUID into Connection → Organization ID to use that tenant.</p>
+            <p className="doc-list-lede">Select an organization in the sidebar to activate it, or use the button below.</p>
             {orgListError ? <p className="error">{orgListError}</p> : null}
             {!orgListError && !orgListLoading && orgRows.length === 0 ? <p className="hint">No organizations yet.</p> : null}
             {orgRows.length > 0 ? (
@@ -2769,7 +2778,7 @@ export function App() {
                         <td className="cell-mono cell-id">{row.id}</td>
                         <td>
                           <button type="button" className="secondary table-inline-btn" onClick={() => setOrgId(row.id)}>
-                            Use in Connection
+                            Select in sidebar
                           </button>
                         </td>
                       </tr>
@@ -2779,6 +2788,85 @@ export function App() {
               </div>
             ) : null}
           </section>
+
+          {/* Sites management — create new sites, view existing */}
+          <section className="card">
+            <h2>Sites</h2>
+            <p className="card-subtitle">
+              Sites (locations) let bills at the same location be compared over time. Select an organization
+              in the sidebar first, then create sites here.
+            </p>
+            <p className="hint">
+              Bills for the <strong>same site</strong> are compared month over month. Pick a site in the sidebar
+              before uploading; assign it on old bills in the document viewer.
+            </p>
+            {siteListError ? <p className="error">{siteListError}</p> : null}
+            <div className="connection-sites-create">
+              <label className="field field--inline">
+                <span>New site name</span>
+                <input
+                  value={newSiteName}
+                  onChange={(e) => setNewSiteName(e.target.value)}
+                  placeholder="Seattle"
+                  disabled={!isUuid(effectiveOrgId)}
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!canManageActiveOrg || siteCreateBusy}
+                onClick={() => void handleCreateSite()}
+              >
+                {siteCreateBusy ? "Creating…" : "Create site"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!isUuid(effectiveOrgId) || siteListLoading}
+                onClick={() => void loadSitesList()}
+              >
+                Refresh sites
+              </button>
+            </div>
+            {siteCreateMessage ? <p className="hint">{siteCreateMessage}</p> : null}
+            {siteRows.length > 0 ? (
+              <div className="table-wrap" style={{ marginTop: "0.85rem" }}>
+                <table className="doc-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Site ID</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {siteRows.map((s) => (
+                      <tr
+                        key={s.id}
+                        className={`doc-table__row${selectedSiteId === s.id ? " doc-table__row--selected" : ""}`}
+                        onClick={() => {
+                          setSelectedSiteId(s.id);
+                          if (isUuid(effectiveOrgId)) storeSiteIdForOrg(effectiveOrgId, s.id);
+                        }}
+                      >
+                        <td>
+                          {s.name}
+                          {selectedSiteId === s.id ? (
+                            <span style={{ marginLeft: "0.5rem", fontSize: "0.72rem", color: "var(--ok)" }}>
+                              ✓ active
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="cell-mono cell-id">{s.id}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : !siteListLoading && isUuid(effectiveOrgId) ? (
+              <p className="hint" style={{ marginTop: "0.5rem" }}>No sites yet for this organization.</p>
+            ) : null}
+          </section>
+
           {effectiveOrgId && isUuid(effectiveOrgId) && canManageActiveOrg ? (
             <OrganizationTeamPanel
               apiBase={apiBase}
@@ -2788,27 +2876,31 @@ export function App() {
           ) : null}
         </>
       )}
-      {view === "account" && authUser ? (
-        <AccountPage
-          apiBase={apiBase}
-          user={authUser}
-          onUserUpdated={(u) => setAuthUser(u)}
-        />
-      ) : null}
-      {pendingReview
-        ? createPortal(
-            <ReviewTransitionModal
-              actionLabel={pendingReview.actionLabel}
-              note={reviewNoteDraft}
-              busy={anomalyReviewBusyId === pendingReview.anomalyId}
-              openedAtMs={reviewModalOpenedAtRef.current}
-              onNoteChange={setReviewNoteDraft}
-              onConfirm={() => void handleConfirmAnomalyReview()}
-              onCancel={handleCancelAnomalyReview}
-            />,
-            document.body,
-          )
-        : null}
+          {view === "account" && authUser ? (
+            <AccountPage
+              apiBase={apiBase}
+              user={authUser}
+              onUserUpdated={(u) => setAuthUser(u)}
+            />
+          ) : null}
+        </div>{/* end .app-content */}
+
+        {/* Review modal portal — rendered at body level */}
+        {pendingReview
+          ? createPortal(
+              <ReviewTransitionModal
+                actionLabel={pendingReview.actionLabel}
+                note={reviewNoteDraft}
+                busy={anomalyReviewBusyId === pendingReview.anomalyId}
+                openedAtMs={reviewModalOpenedAtRef.current}
+                onNoteChange={setReviewNoteDraft}
+                onConfirm={() => void handleConfirmAnomalyReview()}
+                onCancel={handleCancelAnomalyReview}
+              />,
+              document.body,
+            )
+          : null}
+      </main>
     </div>
   );
 }
