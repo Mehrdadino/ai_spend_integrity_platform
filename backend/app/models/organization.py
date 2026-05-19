@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from app.models.anomaly_review_event import AnomalyReviewEvent
     from app.models.bill import Bill
     from app.models.document import Document
+    from app.models.organization_invite import OrganizationInvite
+    from app.models.organization_member import OrganizationMember
     from app.models.site import Site
     from app.models.user import User
 
@@ -54,4 +56,14 @@ class Organization(Base):
     anomaly_review_events: Mapped[list["AnomalyReviewEvent"]] = relationship(
         "AnomalyReviewEvent",
         back_populates="organization",
+    )
+    members: Mapped[list["OrganizationMember"]] = relationship(
+        "OrganizationMember",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    invites: Mapped[list["OrganizationInvite"]] = relationship(
+        "OrganizationInvite",
+        back_populates="organization",
+        cascade="all, delete-orphan",
     )

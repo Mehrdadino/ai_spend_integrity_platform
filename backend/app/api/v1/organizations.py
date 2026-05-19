@@ -1,6 +1,8 @@
-"""Organization API: list/create scoped by platform role and org ownership."""
+"""Organization API: list/create scoped by membership; team routes in ``organization_team``."""
 
 from __future__ import annotations
+
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -14,8 +16,19 @@ from app.repositories.organizations import (
     list_organizations_for_user,
 )
 from app.schemas.organizations import CreateOrganizationRequest, OrganizationResponse
+from app.services.auth.access import get_org_role_for_user
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
+
+
+def _org_response(session: Session, org, user: User) -> OrganizationResponse:
+    return OrganizationResponse(
+        id=org.id,
+        name=org.name,
+        slug=org.slug,
+        created_at=org.created_at,
+        my_role=get_org_role_for_user(session, user=user, organization_id=org.id),
+    )
 
 
 @router.get("", response_model=list[OrganizationResponse])
@@ -24,9 +37,9 @@ def get_organizations(
     user: User = Depends(require_current_user),
     limit: int = Query(200, ge=1, le=500, description="Max organizations returned (newest first)"),
 ) -> list[OrganizationResponse]:
-    """Platform admins: all orgs. Members: only orgs they created."""
+    """Platform admins: all orgs. Others: orgs they are a member of."""
     rows = list_organizations_for_user(db, user=user, limit=limit)
-    return [OrganizationResponse.model_validate(r) for r in rows]
+    return [_org_response(db, r, user) for r in rows]
 
 
 @router.post("", response_model=OrganizationResponse, status_code=201)
@@ -35,7 +48,7 @@ def post_organization(
     db: Session = Depends(get_db),
     user: User = Depends(require_current_user),
 ) -> OrganizationResponse:
-    """Create a tenant; the signed-in user becomes ``created_by_user_id``."""
+    """Create a tenant; the signed-in user becomes ``org_admin`` member."""
     try:
         org = create_organization(
             db,
@@ -50,4 +63,4 @@ def post_organization(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return OrganizationResponse.model_validate(org)
+    return _org_response(db, org, user)

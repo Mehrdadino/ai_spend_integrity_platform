@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-19 (Account page, change email/password, remember-device JWT)  
+**Last updated:** 2026-05-19 (org membership, invites, per-org roles; migration **016**)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -31,7 +31,9 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **3b** | Rule pack **v1.1** (`comparison-v1.1`): `rule_pack_v1.py` + `single_bill_integrity.py` (MoM, new fees, header mismatch, duplicate lines, fee share, penalty fees, period/credit signals); **`GET …/bill/comparison`**; UI **Comparison insights**. |
 | **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`** (+ **`GET …/anomalies/{id}`** §4d); replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab. New anomalies default **`review_status=open`** (**009**). |
 | **3e** | **Shipped:** RQ backfill after worker upsert runs **bounded site-wide** comparison when the bill has a ``site_id``; **PATCH …/site** + **DELETE** queue site refresh (old site on move/delete); **010** index ``ix_bills_org_site_period_sort``; ``list_document_ids_newest_through_anchor`` adds immediate-older neighbor for targeted repair; keyset pages + ``SITE_BILL_REFRESH_MAX_BILLS``. |
-| **P1** | **Shipped:** auth register/login/2FA/forgot/reset; ``POST /auth/change-email``, ``POST /auth/change-password``; **Account** UI tab; JWT session vs **30d remember-device** (``JWT_SESSION_EXPIRE_MINUTES``, ``JWT_REMEMBER_EXPIRE_MINUTES``); migration **015**; SMTP or skip 2FA when unset. |
+| **P1** | **Shipped:** auth + **Account**; migration **015**; **016** ``organization_members`` + ``organization_invites``; per-org ``org_admin``/``member``/``viewer``; team API + UI; ``POST /auth/accept-invite``; ``require_org_writer`` / ``require_org_manager``. |
+| **P1-security** | **Shipped:** Redis rate limits (IP + email buckets), login lockout, security headers middleware, ``APP_ENV=production`` startup validation. |
+| **P1-deferred** | SSO, email verify, session revoke, auth audit, TOTP, domain allowlist (see product roadmap). |
 | **P3** | **Shipped:** ``users.role`` admin/member; ``require_admin`` on document delete, site create, ``POST …/materialize-comparisons``; review audit ``actor_user_id`` from JWT. |
 | **4b–4d** | Template copy + confidence from ``anomalies.evidence`` — ``build_explainability_v1`` (`app/services/explain/anomaly_v1.py`); nested ``explainability`` on anomaly JSON; UI **Grounding** + **Explanation** columns. |
 | **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete**; §3e site refresh on delete. |

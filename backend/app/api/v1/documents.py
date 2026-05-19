@@ -16,7 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import AuthContext, require_admin, require_auth_context
+from app.api.deps import AuthContext, require_admin, require_auth_context, require_org_writer
 from app.config import get_settings
 from app.db.session import get_db
 from app.models.document import Document
@@ -176,7 +176,7 @@ def browse_documents(
 def post_presigned_upload(
     body: PresignedUploadRequest,
     db: Session = Depends(get_db),
-    ctx: AuthContext = Depends(require_auth_context),
+    ctx: AuthContext = Depends(require_org_writer),
 ) -> PresignedUploadResponse:
     """Create a row in ``awaiting_object`` state and return a presigned PUT URL."""
     doc, upload_url, expires_in = create_presigned_upload(
@@ -204,7 +204,7 @@ def post_complete_upload(
     document_id: UUID,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    ctx: AuthContext = Depends(require_auth_context),
+    ctx: AuthContext = Depends(require_org_writer),
 ) -> CompleteUploadResponse:
     """After the client PUTs bytes to storage, finalize hash and size (server-side read)."""
     try:
@@ -371,7 +371,7 @@ def patch_document_display_name(
     document_id: UUID,
     body: PatchDocumentDisplayNameRequest,
     db: Session = Depends(get_db),
-    ctx: AuthContext = Depends(require_auth_context),
+    ctx: AuthContext = Depends(require_org_writer),
 ) -> PatchDocumentDisplayNameResponse:
     """Set or clear the optional user label on a document (any pipeline status)."""
     doc = update_document_display_name_for_organization(
@@ -391,7 +391,7 @@ def patch_document_site(
     body: PatchDocumentSiteRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    ctx: AuthContext = Depends(require_auth_context),
+    ctx: AuthContext = Depends(require_org_writer),
 ) -> PatchDocumentSiteResponse:
     """Assign a site to this document (and bill) for §3 historical comparison."""
     bill_before = get_bill_for_org_document(db, organization_id=ctx.organization.id, document_id=document_id)
@@ -443,7 +443,7 @@ def post_reprocess_document(
     document_id: UUID,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    ctx: AuthContext = Depends(require_auth_context),
+    ctx: AuthContext = Depends(require_org_writer),
 ) -> ReprocessDocumentResponse:
     """Reset pipeline to ``queued`` and enqueue the worker (``extracted`` / ``failed`` / ``received`` / ``queued`` / ``pending``)."""
     try:

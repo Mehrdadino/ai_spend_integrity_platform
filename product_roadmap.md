@@ -31,7 +31,10 @@ Just:
 - **Sites & upload context:** **Connection** panel — active org, **site picker for uploads** (stored per org), create site; assign or change **site** on a document in the viewer (**`PATCH …/site`**). Comparison history is per **site** (location), not per utility type.
 - **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), falls back to **Tesseract OCR** for scan-only PDFs / image MIME types, optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**).
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
-- **Auth (P1/P3):** **Login UI** + JWT (**remember this device** = 30 days, else ~12h session); email 2FA when **`SMTP_HOST`** is set; **Account** tab — **change email** / **change password**; **register**; **forgot/reset password**; **platform admin** vs **member** RBAC. Dev **`X-Organization-Id`** when `AUTH_ALLOW_DEV_ORG_HEADER=true`. Seed via **`seed-dev-user`** / **`seed-dev-org`**.
+- **Auth (P1/P3):** **Login UI** + JWT (**remember this device** = 30 days, else ~12h session); email 2FA when **`SMTP_HOST`** is set; **Account** tab; **forgot/reset password**; password policy; **invite-only registration** in production (`AUTH_ALLOW_REGISTRATION=false`, open in dev via **`dev.sh`**).
+- **Org teams (B2B):** **`organization_members`** with per-org roles **`org_admin`** | **`member`** | **`viewer`**; email **invites** + **`POST /auth/accept-invite`**; **Team** panel on Organizations (org admin); viewers read-only; members upload/review; org admins manage sites/team/delete.
+- **Platform admin** still sees all orgs; dev **`X-Organization-Id`** when `AUTH_ALLOW_DEV_ORG_HEADER=true`.
+- **Production hardening:** Redis **rate limits** (e.g. **3/15min** per email on forgot/register/invite, **5/15min** login, **10/min** per IP); **lockout** after **5** failed sign-ins; security headers; production startup validation.
 - **§3a prior bills:** `get_prior_bills_for_bill` + **`GET …/bill/prior-bills`** (same org, same `site_id`; period ordering); prior-bill table in document viewer.
 - **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; rule pack **`comparison-v1.1`** — **single-bill integrity** on every bill (no prior): header vs lines, duplicate line fingerprints, high fee share, penalty-style fee labels, missing period dates, credits vs charges; with history: MoM total, new fee lines; **`GET /api/v1/anomalies`** (+ detail) with **template explanations** and **grounding** from saved evidence; **`POST …/materialize-comparisons`** for inbox **Refresh**.
 - **§3e comparison backfill:** After worker upsert, **bounded site-wide** comparison when the bill has a `site_id` (correct priors after mid-timeline insert/delete). **Site change** refreshes the new site (via backfill) and the **previous** site when the bill moved. **Soft delete** triggers site-wide refresh. Keyset walk; cap `SITE_BILL_REFRESH_MAX_BILLS` (default 10,000).
@@ -41,6 +44,7 @@ Just:
 
 ### Still to build for Phase 1 MVP
 
+- **Auth / org (deferred):** SSO (OIDC/SAML), email verification on signup/change-email, revoke-all-sessions, auth audit log, TOTP app 2FA, per-org domain allowlist, seat billing.
 - **§3c** site-to-site comparables (cross-location; not started).
 - **Real-bill pilot** — production LLM structuring quality and more **single-bill** / domain rules on real PDFs.
 - **P2** — worker retries and upload idempotency hardening.

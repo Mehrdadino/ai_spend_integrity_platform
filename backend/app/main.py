@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session
 from app.api.v1.router import api_router as api_v1_router
 from app.config import get_settings
 from app.db.session import get_db
+from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.services.storage import ensure_documents_bucket_exists, get_s3_client
+from app.startup_checks import validate_settings_for_runtime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,12 +25,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Provision dev-friendly object storage (bucket) before accepting traffic."""
+    """Validate config, then provision object storage before accepting traffic."""
+    validate_settings_for_runtime()
     ensure_documents_bucket_exists()
     yield
 
 
 app = FastAPI(title="Spend Integrity API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Allow the Vite dev server to call the API (step 1c); tighten in production.
 _settings = get_settings()

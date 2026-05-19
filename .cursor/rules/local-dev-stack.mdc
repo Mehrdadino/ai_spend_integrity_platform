@@ -66,6 +66,22 @@ cd backend && source .venv/bin/activate && python -m alembic upgrade head
 
 (`alembic` on PATH is optional; **`python -m alembic`** matches the venv used by `dev.sh`.)
 
+## Production deploy (API security)
+
+Set at minimum:
+
+```bash
+APP_ENV=production
+JWT_SECRET_KEY=<random 32+ chars>
+AUTH_ALLOW_DEV_ORG_HEADER=false
+REDIS_URL=redis://...
+RATE_LIMIT_ENABLED=true
+TRUST_FORWARDED_FOR=true   # when behind ALB/nginx
+CORS_ORIGINS=https://your-app.example
+```
+
+Without Redis in production, rate limiting returns **503** (fail closed).
+
 ## Agent maintenance
 
 If you add new long-running dev processes (extra workers, etc.), update **`scripts/dev.sh`** and this rule so “one command” stays accurate. If the **backend venv** story changes, keep **`scripts/bootstrap-backend-venv.sh`** in sync.

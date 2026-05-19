@@ -59,14 +59,20 @@ function apiUrl(apiBase: string, path: string): string {
 
 async function parseError(res: Response): Promise<string> {
   const text = await res.text();
+  let message = text;
   try {
     const json = JSON.parse(text) as { detail?: string | { msg?: string }[] };
-    if (typeof json.detail === "string") return json.detail;
-    if (Array.isArray(json.detail) && json.detail[0]?.msg) return json.detail[0].msg;
+    if (typeof json.detail === "string") message = json.detail;
+    else if (Array.isArray(json.detail) && json.detail[0]?.msg) message = json.detail[0].msg;
   } catch {
     /* use raw text */
   }
-  return text || `Request failed (${res.status})`;
+  if (res.status === 429) {
+    const retry = res.headers.get("Retry-After");
+    if (retry) return `${message || "Too many requests."} Try again in ${retry} seconds.`;
+    return message || "Too many requests. Please wait and try again.";
+  }
+  return message || `Request failed (${res.status})`;
 }
 
 export function getAccessToken(): string | null {

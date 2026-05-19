@@ -1726,3 +1726,24 @@ button.btn-danger:hover:not(:disabled) {
 .password-policy__issues li {
   margin: 0.15rem 0;
 }
+
+.team-subheading {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.team-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.team-list__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}

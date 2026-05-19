@@ -13,6 +13,8 @@ from app.models.bill_line_item import BillLineItem
 from app.models.document import Document
 from app.models.document_raw_extraction import DocumentRawExtraction
 from app.models.organization import Organization
+from app.models.organization_invite import OrganizationInvite
+from app.models.organization_member import OrganizationMember, OrgMemberRole
 from app.models.site import Site
 from app.models.user import User
 
@@ -25,6 +27,9 @@ __all__ = [
     "Document",
     "DocumentRawExtraction",
     "Organization",
+    "OrganizationInvite",
+    "OrganizationMember",
+    "OrgMemberRole",
     "Site",
     "User",
 ]

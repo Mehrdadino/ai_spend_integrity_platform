@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import AuthContext, require_admin, require_auth_context
+from app.api.deps import AuthContext, require_admin, require_auth_context, require_org_writer
 from app.db.session import get_db
 from app.models.anomaly import Anomaly
 from app.repositories.anomalies import (
@@ -103,7 +103,7 @@ def post_anomaly_review(
     anomaly_id: UUID,
     body: ReviewTransitionRequest,
     db: Session = Depends(get_db),
-    ctx: AuthContext = Depends(require_auth_context),
+    ctx: AuthContext = Depends(require_org_writer),
 ) -> AnomalyResponse:
     """§5a: transition workflow state and append an audit row (§5b)."""
     row = get_anomaly_for_organization(

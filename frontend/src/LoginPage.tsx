@@ -230,6 +230,9 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
               <button type="button" className="link-btn" onClick={() => switchView("create-account")}>
                 Create account
               </button>
+              <span className="hint" style={{ display: "block", marginTop: "0.5rem" }}>
+                Production tenants usually join via an email invite from an org admin.
+              </span>
             </p>
           </>
         ) : null}

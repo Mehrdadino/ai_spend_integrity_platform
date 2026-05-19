@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_current_user
+from app.api.rate_limit_deps import rate_limit_auth_ip
 from app.config import get_settings
 from app.db.session import get_db
 from app.models.user import PlatformRole, User
@@ -29,6 +30,11 @@ from app.schemas.auth import (
     UserResponse,
     VerifyLoginOtpRequest,
 )
+from app.schemas.organization_team import (
+    AcceptOrganizationInviteRequest,
+    AcceptOrganizationInviteResponse,
+)
+from app.services.organization_invites import InviteError, accept_invite
 from app.services.auth import (
     ChallengeError,
     complete_password_reset,
@@ -40,6 +46,12 @@ from app.services.auth import (
     verify_password,
 )
 from app.services.auth.email_delivery import is_smtp_configured
+from app.services.auth_lockout import (
+    assert_login_not_locked,
+    clear_login_failures,
+    record_login_failure,
+)
+from app.services.rate_limit import enforce_rate_limit_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -68,7 +80,12 @@ def _require_current_password(user: User, current_password: str) -> None:
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
 
-@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_auth_ip("register"))],
+)
 def post_register(body: RegisterRequest, db: Session = Depends(get_db)) -> RegisterResponse:
     """Create a member account (email + password). Sign-in requires email OTP afterward."""
     settings = get_settings()
@@ -76,6 +93,7 @@ def post_register(body: RegisterRequest, db: Session = Depends(get_db)) -> Regis
         raise HTTPException(status_code=403, detail="Registration is disabled")
 
     email = str(body.email).strip().lower()
+    enforce_rate_limit_email("register", email)
     if get_user_by_email(db, email=email) is not None:
         raise HTTPException(status_code=409, detail="An account with this email already exists")
 
@@ -93,15 +111,26 @@ def post_register(body: RegisterRequest, db: Session = Depends(get_db)) -> Regis
     )
 
 
-@router.post("/login", response_model=LoginChallengeResponse)
+@router.post(
+    "/login",
+    response_model=LoginChallengeResponse,
+    dependencies=[Depends(rate_limit_auth_ip("login"))],
+)
 def post_login(body: LoginRequest, db: Session = Depends(get_db)) -> LoginChallengeResponse:
     """Validate email/password; email OTP when SMTP is configured, else sign in directly (local dev)."""
-    user = get_user_by_email(db, email=body.email.strip())
+    email = body.email.strip().lower()
+    enforce_rate_limit_email("login", email)
+    assert_login_not_locked(email)
+
+    user = get_user_by_email(db, email=email)
     if user is None or not user.password_hash:
-        # Same response shape as success to avoid account enumeration.
+        record_login_failure(email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not verify_password(body.password, user.password_hash):
+        record_login_failure(email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    clear_login_failures(email)
 
     if not is_smtp_configured():
         login = _login_response_for_user(user, remember_device=body.remember_device)
@@ -124,12 +153,17 @@ def post_login(body: LoginRequest, db: Session = Depends(get_db)) -> LoginChalle
     )
 
 
-@router.post("/login/verify-2fa", response_model=LoginResponse)
+@router.post(
+    "/login/verify-2fa",
+    response_model=LoginResponse,
+    dependencies=[Depends(rate_limit_auth_ip("verify_2fa"))],
+)
 def post_verify_login_otp(
     body: VerifyLoginOtpRequest,
     db: Session = Depends(get_db),
 ) -> LoginResponse:
     """Exchange email OTP for a JWT."""
+    enforce_rate_limit_email("verify_2fa", str(body.challenge_id))
     try:
         user = verify_login_otp_challenge(
             db,
@@ -147,13 +181,18 @@ def post_verify_login_otp(
     return _login_response_for_user(user, remember_device=body.remember_device)
 
 
-@router.post("/forgot-password", response_model=MessageResponse)
+@router.post(
+    "/forgot-password",
+    response_model=MessageResponse,
+    dependencies=[Depends(rate_limit_auth_ip("forgot_password"))],
+)
 def post_forgot_password(
     body: ForgotPasswordRequest,
     db: Session = Depends(get_db),
 ) -> MessageResponse:
     """Email a reset link only when the account exists (same response either way)."""
     email = str(body.email).strip().lower()
+    enforce_rate_limit_email("forgot_password", email)
     user = get_user_by_email(db, email=email)
     if user is not None and user.password_hash:
         try:
@@ -166,7 +205,11 @@ def post_forgot_password(
     return MessageResponse(message=_FORGOT_PASSWORD_MESSAGE)
 
 
-@router.post("/reset-password", response_model=MessageResponse)
+@router.post(
+    "/reset-password",
+    response_model=MessageResponse,
+    dependencies=[Depends(rate_limit_auth_ip("reset_password"))],
+)
 def post_reset_password(
     body: ResetPasswordRequest,
     db: Session = Depends(get_db),
@@ -195,7 +238,11 @@ def get_me(user: User = Depends(require_current_user)) -> UserResponse:
     return UserResponse.model_validate(user)
 
 
-@router.post("/change-password", response_model=MessageResponse)
+@router.post(
+    "/change-password",
+    response_model=MessageResponse,
+    dependencies=[Depends(rate_limit_auth_ip("change_password"))],
+)
 def post_change_password(
     body: ChangePasswordRequest,
     db: Session = Depends(get_db),
@@ -231,3 +278,33 @@ def post_change_email(
     db.commit()
     db.refresh(user)
     return _login_response_for_user(user, remember_device=True)
+
+
+@router.post(
+    "/accept-invite",
+    response_model=AcceptOrganizationInviteResponse,
+    dependencies=[Depends(rate_limit_auth_ip("accept_invite"))],
+)
+def post_accept_invite(
+    body: AcceptOrganizationInviteRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+) -> AcceptOrganizationInviteResponse:
+    """Join an organization using the token from an invite email."""
+    try:
+        invite = accept_invite(db, token=body.invite_token, user=user)
+        db.commit()
+    except InviteError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    org = invite.organization
+    return AcceptOrganizationInviteResponse(
+        organization_id=org.id,
+        organization_name=org.name,
+        role=invite.role,
+        message=f"You joined {org.name}.",
+    )

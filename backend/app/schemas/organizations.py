@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,3 +32,7 @@ class OrganizationResponse(BaseModel):
     name: str
     slug: str
     created_at: datetime
+    my_role: Optional[str] = Field(
+        default=None,
+        description="Signed-in user's role in this org (org_admin | member | viewer).",
+    )

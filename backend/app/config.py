@@ -15,6 +15,11 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # ``development`` | ``production`` — production enables strict startup checks.
+    app_env: str = "development"
+    # Trust ``X-Forwarded-For`` when behind a load balancer / reverse proxy.
+    trust_forwarded_for: bool = False
+
     # Postgres DSN for SQLAlchemy (sync driver for Phase 1 simplicity).
     database_url: str = "postgresql+psycopg2://spend:spend@127.0.0.1:15432/spend_integrity"
 
@@ -69,7 +74,9 @@ class Settings(BaseSettings):
     jwt_remember_expire_minutes: int = 30 * 24 * 60
     auth_allow_dev_org_header: bool = True
     # Sign-up, email 2FA, and password reset (P1 extension).
-    auth_allow_registration: bool = True
+    # False in production: users join via org invite (platform admin can still seed users).
+    auth_allow_registration: bool = False
+    org_invite_expire_days: int = 7
     auth_otp_expire_minutes: int = 10
     auth_reset_expire_minutes: int = 60
     # Base URL for links in password-reset emails (Vite dev server by default).
@@ -81,6 +88,20 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from_email: str = "noreply@spend-integrity.local"
     smtp_use_tls: bool = True
+
+    # Rate limiting (Redis). Required in production when ``app_env=production``.
+    rate_limit_enabled: bool = True
+    # Per client IP, per auth action (login, forgot-password, etc.).
+    auth_rate_limit_ip_per_minute: int = 10
+    # Per email: sign-in attempts (then lockout below is the harder stop).
+    auth_rate_limit_login_email_per_15min: int = 5
+    # Per email: endpoints that send email (forgot password, register, invite) — tighter.
+    auth_rate_limit_sensitive_email_per_15min: int = 3
+    # Per challenge id: OTP brute-force cap.
+    auth_rate_limit_verify_2fa_per_15min: int = 5
+    # Lockout after repeated failed sign-ins (per email).
+    auth_lockout_max_failures: int = 5
+    auth_lockout_minutes: int = 15
 
     # P3 org bootstrap: when set, ``GET/POST /organizations`` require this header value.
     org_bootstrap_token: str = ""

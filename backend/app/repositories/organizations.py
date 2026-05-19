@@ -10,7 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.organization import Organization
+from app.models.organization_member import OrgMemberRole
 from app.models.user import User
+from app.repositories.organization_members import (
+    add_organization_member,
+    list_organizations_for_member_user,
+)
 from app.services.auth.access import is_platform_admin
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -54,6 +59,13 @@ def ensure_organization(
     )
     session.add(org)
     session.flush()
+    if created_by_user_id is not None:
+        add_organization_member(
+            session,
+            organization_id=org.id,
+            user_id=created_by_user_id,
+            role=OrgMemberRole.ORG_ADMIN.value,
+        )
     return org
 
 
@@ -66,16 +78,10 @@ def list_organizations(session: Session, *, limit: int = 500) -> list[Organizati
 
 
 def list_organizations_for_user(session: Session, *, user: User, limit: int = 500) -> list[Organization]:
-    """Admins: all orgs. Members: only rows with ``created_by_user_id`` = this user."""
+    """Admins: all orgs. Others: orgs they belong to via ``organization_members``."""
     if is_platform_admin(user):
         return list_organizations(session, limit=limit)
-    rows = session.scalars(
-        select(Organization)
-        .where(Organization.created_by_user_id == user.id)
-        .order_by(Organization.created_at.desc())
-        .limit(limit)
-    ).all()
-    return list(rows)
+    return list_organizations_for_member_user(session, user_id=user.id, limit=limit)
 
 
 def create_organization(
@@ -101,4 +107,11 @@ def create_organization(
     )
     session.add(org)
     session.flush()
+    if created_by_user_id is not None:
+        add_organization_member(
+            session,
+            organization_id=org.id,
+            user_id=created_by_user_id,
+            role=OrgMemberRole.ORG_ADMIN.value,
+        )
     return org

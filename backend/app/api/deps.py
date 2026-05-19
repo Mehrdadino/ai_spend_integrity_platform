@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import Annotated, Optional
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Path
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -16,7 +17,11 @@ from app.models.organization import Organization
 from app.models.user import PlatformRole, User
 from app.repositories.organizations import get_organization_by_id
 from app.repositories.users import get_user_by_id
-from app.services.auth.access import user_can_access_organization, user_can_manage_organization
+from app.services.auth.access import (
+    user_can_access_organization,
+    user_can_manage_organization,
+    user_can_write_organization,
+)
 from app.services.auth.jwt_tokens import AccessTokenClaims, TokenValidationError, decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
@@ -79,7 +84,7 @@ def require_auth_context(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
     x_organization_id: Annotated[Optional[str], Header(alias="X-Organization-Id")] = None,
 ) -> AuthContext:
-    """JWT + active org header; enforces platform admin vs org-owner access."""
+    """JWT + active org header; enforces membership (or platform admin)."""
     if credentials is not None and credentials.credentials:
         try:
             claims = decode_access_token(credentials.credentials)
@@ -87,7 +92,7 @@ def require_auth_context(
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         user = _user_from_claims(db, claims)
         org = _organization_from_header(x_organization_id, db)
-        if not user_can_access_organization(user, org):
+        if not user_can_access_organization(db, user, org):
             raise HTTPException(status_code=403, detail="You do not have access to this organization")
         return AuthContext(organization=org, user=user)
 
@@ -109,18 +114,48 @@ def require_organization(
     return ctx.organization
 
 
-def require_org_manager(
+def require_org_writer(
+    db: Session = Depends(get_db),
     ctx: AuthContext = Depends(require_auth_context),
 ) -> AuthContext:
-    """Platform admin or org creator — site create, delete doc, batch materialize."""
+    """Upload, review, and other mutating product actions (not viewers)."""
     if ctx.user is None:
         raise HTTPException(
             status_code=403,
             detail="Sign in required (dev header cannot perform this action)",
         )
-    if not user_can_manage_organization(ctx.user, ctx.organization):
+    if not user_can_write_organization(db, ctx.user, ctx.organization):
+        raise HTTPException(status_code=403, detail="You have read-only access to this organization")
+    return ctx
+
+
+def require_org_manager(
+    db: Session = Depends(get_db),
+    ctx: AuthContext = Depends(require_auth_context),
+) -> AuthContext:
+    """Org admin: sites, delete docs, invites, batch materialize."""
+    if ctx.user is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in required (dev header cannot perform this action)",
+        )
+    if not user_can_manage_organization(db, ctx.user, ctx.organization):
         raise HTTPException(status_code=403, detail="You cannot manage this organization")
     return ctx
+
+
+def require_org_admin_for_path_org(
+    organization_id: Annotated[uuid.UUID, Path(description="Organization UUID")],
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+) -> tuple[Organization, User]:
+    """Team routes: resolve org from path and require org_admin (or platform admin)."""
+    org = get_organization_by_id(db, organization_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if not user_can_manage_organization(db, user, org):
+        raise HTTPException(status_code=403, detail="Org admin role required")
+    return org, user
 
 
 def require_platform_admin(

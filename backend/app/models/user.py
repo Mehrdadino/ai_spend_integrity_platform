@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from app.models.anomaly_review_event import AnomalyReviewEvent
     from app.models.auth_challenge import AuthChallenge
     from app.models.organization import Organization
+    from app.models.organization_member import OrganizationMember
 
 
 class User(Base):
@@ -62,6 +63,11 @@ class User(Base):
     )
     auth_challenges: Mapped[list["AuthChallenge"]] = relationship(
         "AuthChallenge",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    organization_memberships: Mapped[list["OrganizationMember"]] = relationship(
+        "OrganizationMember",
         back_populates="user",
         cascade="all, delete-orphan",
     )

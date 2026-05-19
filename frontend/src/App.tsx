@@ -15,6 +15,7 @@ import {
 import { createPortal } from "react-dom";
 import { AnomalyDocumentFilter } from "./components/AnomalyDocumentFilter";
 import { AccountPage } from "./AccountPage";
+import { OrganizationTeamPanel } from "./components/OrganizationTeamPanel";
 import { LoginPage } from "./LoginPage";
 import {
   clearSession,
@@ -22,6 +23,11 @@ import {
   isPlatformAdmin,
   type AuthUser,
 } from "./lib/auth";
+import {
+  acceptOrganizationInvite,
+  canWriteOrgRole,
+  isOrgAdminRole,
+} from "./lib/organizationTeam";
 import {
   createOrganization,
   fetchOrganizationsList,
@@ -1288,8 +1294,25 @@ export function App() {
 
   const effectiveOrgId = useMemo(() => orgId.trim(), [orgId]);
   const platformAdmin = isPlatformAdmin(authUser);
-  /** Org owners (members) and platform admins may create sites / delete docs in the active org. */
-  const canManageActiveOrg = Boolean(authUser && effectiveOrgId && isUuid(effectiveOrgId));
+  const activeOrgRole = useMemo(() => {
+    if (!effectiveOrgId || !isUuid(effectiveOrgId)) return null;
+    const row = orgRows.find((o) => o.id === effectiveOrgId);
+    return row?.my_role ?? (platformAdmin ? "org_admin" : null);
+  }, [effectiveOrgId, orgRows, platformAdmin]);
+  /** Org admin (or platform admin): sites, delete docs, invites, materialize. */
+  const canManageActiveOrg = Boolean(
+    authUser &&
+      effectiveOrgId &&
+      isUuid(effectiveOrgId) &&
+      (platformAdmin || isOrgAdminRole(activeOrgRole)),
+  );
+  /** Member or org admin may upload and review (not viewers). */
+  const canWriteActiveOrg = Boolean(
+    authUser &&
+      effectiveOrgId &&
+      isUuid(effectiveOrgId) &&
+      (platformAdmin || canWriteOrgRole(activeOrgRole)),
+  );
 
   const submitBlockedReason = useMemo(() => {
     if (!apiBase.trim()) {
@@ -1301,6 +1324,9 @@ export function App() {
     if (!effectiveOrgId || !isUuid(effectiveOrgId)) {
       return "Choose an organization under Connection.";
     }
+    if (!canWriteActiveOrg) {
+      return "You have read-only access to this organization.";
+    }
     if (!file) {
       return "Choose a file.";
     }
@@ -1308,7 +1334,7 @@ export function App() {
       return "Wait for the current step to finish.";
     }
     return null;
-  }, [apiBase, orgId, file, phaseAllowsSubmit]);
+  }, [apiBase, orgId, file, phaseAllowsSubmit, canWriteActiveOrg]);
 
   const canSubmit = submitBlockedReason === null;
 
@@ -2123,6 +2149,28 @@ export function App() {
       ? new URLSearchParams(window.location.search).get("reset_token")
       : null;
 
+  useEffect(() => {
+    if (!authUser || !apiBase.trim()) return;
+    const params = new URLSearchParams(window.location.search);
+    const inviteToken = params.get("invite_token");
+    if (!inviteToken?.trim()) return;
+    void (async () => {
+      try {
+        const res = await acceptOrganizationInvite(apiBase.trim(), inviteToken.trim());
+        setOrgId(res.organization_id);
+        if (params.has("invite_token")) {
+          params.delete("invite_token");
+          const q = params.toString();
+          window.history.replaceState({}, "", `${window.location.pathname}${q ? `?${q}` : ""}`);
+        }
+        void loadOrganizationsList();
+        alert(res.message);
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }, [authUser, apiBase, loadOrganizationsList]);
+
   if (!authUser) {
     return (
       <LoginPage
@@ -2219,7 +2267,8 @@ export function App() {
         <div className="connection-auth-signed-in">
           <p className="hint">
             Signed in as <strong>{authUser.email}</strong>
-            {platformAdmin ? " (platform admin)" : " (member)"}
+            {platformAdmin ? " (platform admin)" : ""}
+            {activeOrgRole && effectiveOrgId ? ` · org role: ${activeOrgRole}` : ""}
           </p>
           <button type="button" className="secondary" onClick={goToAccount}>
             Account settings
@@ -2705,6 +2754,7 @@ export function App() {
                       <th>Created</th>
                       <th>Name</th>
                       <th>Slug</th>
+                      <th>Your role</th>
                       <th>UUID</th>
                       <th> </th>
                     </tr>
@@ -2715,6 +2765,7 @@ export function App() {
                         <td>{new Date(row.created_at).toLocaleString()}</td>
                         <td>{row.name}</td>
                         <td className="cell-mono">{row.slug}</td>
+                        <td>{row.my_role ?? "—"}</td>
                         <td className="cell-mono cell-id">{row.id}</td>
                         <td>
                           <button type="button" className="secondary table-inline-btn" onClick={() => setOrgId(row.id)}>
@@ -2728,6 +2779,13 @@ export function App() {
               </div>
             ) : null}
           </section>
+          {effectiveOrgId && isUuid(effectiveOrgId) && canManageActiveOrg ? (
+            <OrganizationTeamPanel
+              apiBase={apiBase}
+              organizationId={effectiveOrgId}
+              organizationName={orgRows.find((o) => o.id === effectiveOrgId)?.name ?? "Organization"}
+            />
+          ) : null}
         </>
       )}
       {view === "account" && authUser ? (

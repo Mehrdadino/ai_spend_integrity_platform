@@ -10,6 +10,7 @@ export interface OrganizationResponse {
   name: string;
   slug: string;
   created_at: string;
+  my_role?: string | null;
 }
 
 export interface CreateOrganizationRequest {

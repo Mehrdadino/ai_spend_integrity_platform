@@ -100,7 +100,8 @@ else
 fi
 
 echo "==> API http://127.0.0.1:8000 (uvicorn --reload)"
-(cd "$ROOT/backend" && exec "${PY}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000) &
+# Open registration for local dev; production should use invite-only (AUTH_ALLOW_REGISTRATION=false).
+(cd "$ROOT/backend" && AUTH_ALLOW_REGISTRATION=true exec "${PY}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000) &
 PIDS+=("$!")
 
 echo "==> frontend http://127.0.0.1:5173 (vite)"
