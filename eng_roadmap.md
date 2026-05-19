@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-15 (comparison-v1.1 single-bill integrity; P1/P3; §3e keyset)  
+**Last updated:** 2026-05-19 (§3e site-wide backfill; display names; browse; platform auth UI)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -21,7 +21,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **Backend (`backend/`)** | FastAPI; Alembic **`008_anomalies`** + **`009_anomaly_review`** (`anomalies.review_status`, **`anomaly_review_events`**); ORM + **`app/services/review/`** (transitions); **`app/services/explain/`** (§4 templates). |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
 | **1b** | Documents API + **`GET/POST /api/v1/organizations`** (dev admin). Tenant = **`X-Organization-Id`** on document routes. |
-| **1c** | **`frontend/`** Upload, **Documents**, **Anomalies**, **Organizations** tabs; viewer + normalized bill panel; **reprocess**; pipeline **polling**; **Anomalies** §5 **review status** + **Refresh** (batch **materialize-comparisons** + list reload); §5e **note modal** + **History** (audit events). |
+| **1c** | **`frontend/`** **LoginPage** + org picker (platform admin); Upload (optional **display_name**, **site** via Connection); **Documents** / **Anomalies** / **Organizations**; viewer (**display name**, **site** assign); **reprocess**; pipeline **polling**; anomalies **grouped by document**, **AnomalyDocumentFilter** + **`GET /documents/browse`**; Documents ↔ Anomalies **Signals** links; §5 review + **Refresh** (**materialize-comparisons**). |
 | **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess; after bill upsert **§3e** enqueues comparison backfill on the same ``documents`` queue. |
 | **1h** | List + detail + **`processing_error`**; latest raw extraction on detail. |
 | **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional **Tesseract OCR** for scan-only PDFs / images → optional LLM → **`generic-bill-v1`** JSONB. |
@@ -34,8 +34,11 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **P1** | **Shipped:** ``POST /api/v1/auth/login``, ``GET /auth/me``; JWT bearer in ``require_auth_context``; optional dev ``X-Organization-Id``; migration **011_user_auth_rbac**. |
 | **P3** | **Shipped:** ``users.role`` admin/member; ``require_admin`` on document delete, site create, ``POST …/materialize-comparisons``; review audit ``actor_user_id`` from JWT. |
 | **4b–4d** | Template copy + confidence from ``anomalies.evidence`` — ``build_explainability_v1`` (`app/services/explain/anomaly_v1.py`); nested ``explainability`` on anomaly JSON; UI **Grounding** + **Explanation** columns. |
-| **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete** button (hidden from list). |
-| **Dev helpers** | **`seed-dev-org`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
+| **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete**; §3e site refresh on delete. |
+| **013 / 014** | **`013`**: unique ``(organization_id, sha256)`` only when ``deleted_at IS NULL`` (re-upload after soft delete). **`014`**: ``documents.display_name`` + **`PATCH …/display-name`**. |
+| **012 platform roles** | Platform **admin** vs **member**; JWT without tenant; org list scoped by role. |
+| **Browse API** | **`GET /api/v1/documents/browse`** — paginated search for anomaly document filter (large orgs). |
+| **Dev helpers** | **`seed-dev-org`**; **`seed-dev-user`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
 
 ### Not started (still Phase 1 product scope)
 
@@ -47,7 +50,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | ID | Item |
 |----|------|
 | **2-OPT** | Optional `total_amount` on `generic-bill-v1` `raw_payload` (amount due vs sum-of-lines). |
-| **1-OPT** | `site_id` on upload UI (API already accepts it). |
+| **1-OPT** | ~~`site_id` on upload UI~~ — **shipped** via Connection site picker + presign; viewer **PATCH …/site** for retroactive assign. |
 | **2-OPT** | OCR quality hardening (DPI/thresholds, coverage tests). |
 | **2e** | Internal raw vs normalized viewer (admin). |
 | **4b-OPT** | LLM polish on explanation templates. |
@@ -64,9 +67,9 @@ These are **not** in the current sprint; **§3c** stays out of repo until produc
 
 ### Suggested “resume here” order
 
-1. **§3c** — site-to-site comparables when a pilot needs cross-location views.  
-2. **P2 + P4–P5** — retries/idempotency, observability, E2E smoke.  
-3. **1-OPT** — ``site_id`` on upload UI; real-bill extraction pilot.
+1. **Real-bill pilot** — LLM extraction + more **single-bill** / domain rules on production PDFs.  
+2. **§3c** — site-to-site comparables when a pilot needs cross-location views.  
+3. **P2 + P4–P5** — retries/idempotency, observability, E2E smoke.
 
 ---
 

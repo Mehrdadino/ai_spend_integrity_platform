@@ -20,52 +20,55 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-15 (single-bill integrity + P1/P3)
+## Implementation status (repository) — 2026-05-19
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
-### Built so far (Phase 1 — ingestion + normalization shell)
+### Built so far (Phase 1 — ingestion through review)
 
 - **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO**, **Redis + RQ**, **Vite + React + TypeScript** UI. Docker Compose runs Postgres, MinIO, and Redis locally.
-- **Document ingestion:** presigned upload + CLI; **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs. **Anomalies** tab lists persisted comparison signals (**§3d**).
+- **Document ingestion:** presigned upload + CLI; optional **display name** on upload; **SHA-256 dedupe** per org (re-upload allowed after soft delete); **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs.
+- **Sites & upload context:** **Connection** panel — active org, **site picker for uploads** (stored per org), create site; assign or change **site** on a document in the viewer (**`PATCH …/site`**). Comparison history is per **site** (location), not per utility type.
 - **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), falls back to **Tesseract OCR** for scan-only PDFs / image MIME types, optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**).
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
-- **Auth (P1/P3):** JWT login (`POST /api/v1/auth/login`, `GET /auth/me`); org-scoped bearer on document/anomaly/site routes; **admin** vs **member** RBAC (admin: delete document, create site, batch materialize; member: upload/review/read). Dev **`X-Organization-Id`** still accepted when `AUTH_ALLOW_DEV_ORG_HEADER=true`. Seed users via **`seed-dev-user`**.
-- **§3a prior bills:** `list_bills_for_site` / `get_prior_bills_for_bill` + **`GET /api/v1/documents/{id}/bill/prior-bills`** (same-org, same-`site_id`; period ordering in eng **3a**).
-- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; **single-bill integrity** (`comparison-v1.1`) runs on every bill with no prior required (header vs lines, duplicate line fingerprints, high fee share, penalty-style fee labels, missing period dates, credits vs charges); **`GET /api/v1/anomalies`** returns **template explanations** + **grounding tiers** from saved evidence; **`GET …/anomalies/{id}`** for detail; **`POST /api/v1/anomalies/materialize-comparisons`** runs the same comparison for every finished document in the org (optional site filter) so the **Anomalies** tab **Refresh** can populate the list **without opening each document**.
-- **§5 review workflow:** Alembic **`009_anomaly_review`** adds **`review_status`** + audit **`anomaly_review_events`**; **`POST /api/v1/anomalies/{id}/review`** transitions state; inbox **Review status** filter and per-row **Actions** (approve / dismiss / flag / reopen) with optional **§5e notes** (modal + **History** audit list).
-- **§3e comparison backfill:** After the worker materializes a normalized bill, an RQ job runs **bounded site-wide** comparison on that bill’s site (every remaining bill gets the correct immediate prior after mid-timeline inserts or deletes). Changing a document’s **site** triggers backfill on the new site plus refresh for bills left on the **previous** site. Document **delete** refreshes the whole site. Prior-bill queries use indexed SQL (keyset site walk; cap ``SITE_BILL_REFRESH_MAX_BILLS``).
-- **Document soft delete:** `deleted_at` + **`DELETE /api/v1/documents/{id}`** + UI **Delete** (hard delete / purge later).
+- **Auth (P1/P3):** **Login UI** + JWT (`POST /api/v1/auth/login`, `GET /auth/me`); **platform admin** (all orgs) vs **member** (home org); org-scoped bearer on document/anomaly/site routes; **admin** vs **member** RBAC (admin: delete document, create site, batch materialize; member: upload/review/read). Dev **`X-Organization-Id`** still accepted when `AUTH_ALLOW_DEV_ORG_HEADER=true`. Seed via **`seed-dev-user`** / **`seed-dev-org`**.
+- **§3a prior bills:** `get_prior_bills_for_bill` + **`GET …/bill/prior-bills`** (same org, same `site_id`; period ordering); prior-bill table in document viewer.
+- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; rule pack **`comparison-v1.1`** — **single-bill integrity** on every bill (no prior): header vs lines, duplicate line fingerprints, high fee share, penalty-style fee labels, missing period dates, credits vs charges; with history: MoM total, new fee lines; **`GET /api/v1/anomalies`** (+ detail) with **template explanations** and **grounding** from saved evidence; **`POST …/materialize-comparisons`** for inbox **Refresh**.
+- **§3e comparison backfill:** After worker upsert, **bounded site-wide** comparison when the bill has a `site_id` (correct priors after mid-timeline insert/delete). **Site change** refreshes the new site (via backfill) and the **previous** site when the bill moved. **Soft delete** triggers site-wide refresh. Keyset walk; cap `SITE_BILL_REFRESH_MAX_BILLS` (default 10,000).
+- **§5 review workflow:** `review_status` + **`anomaly_review_events`**; **`POST …/anomalies/{id}/review`**; inbox **Review status** filter; per-row **Actions** (approve / dismiss / flag / reopen) with **§5e notes** and **History**.
+- **Anomalies inbox UX:** signals **grouped by bill/document**; optional **display name** on list/API; **Filter by bill** — searchable, paginated **`GET /documents/browse`**; **View bill** on group; row click opens document (text can be highlighted without navigating). **Documents** tab **Signals** link and viewer **View in signals inbox** jump to filtered Anomalies.
+- **Document labels & delete:** optional **`display_name`** — set on upload, edit/clear in viewer, **`PATCH …/display-name`**; soft delete **`DELETE …/documents/{id}`** + UI **Delete** (S3 bytes retained until hard delete).
 
 ### Still to build for Phase 1 MVP
 
-**Remaining comparison breadth** (**§3c** is scoped as future work — see below) and hardening on **real** structured bills (template §4 is shipped; optional LLM wording polish can follow).
+- **§3c** site-to-site comparables (cross-location; not started).
+- **Real-bill pilot** — production LLM structuring quality and more **single-bill** / domain rules on real PDFs.
+- **P2** — worker retries and upload idempotency hardening.
 
 ### Recommended next focus (product ↔ eng)
 
-- **§3c** — site-to-site comparables when pilots need cross-location views.
-- **P2** — worker retries + upload idempotency hardening.
-- **Real-bill pilot** — `EXTRACTION_LLM_API_KEY`, `site_id` on upload UI (**1-OPT**).
+- **Real-bill pilot** — `EXTRACTION_LLM_API_KEY`, validate normalization on real utility PDFs; extend **single-bill integrity** (extraction-quality warnings, tax share, domain packs).
+- **§3c** — site-to-site comparables when a pilot needs cross-location views.
+- **P2** — worker retries + idempotency.
+- **Comparison chain by utility type** — optional split of priors by `spend_domain` / service (today: one chain per site only).
 
 ### Possible future work (comparison breadth)
 
-- **§3c — site-to-site comparables:** compare normalized usage/charges across locations when categories and units align, with explicit “not comparable” outcomes. **Not started**; ship only when a pilot needs cross-location views (see [`eng_roadmap.md`](eng_roadmap.md) §0.0).
+- **§3c — site-to-site comparables:** compare normalized usage/charges across locations when categories and units align, with explicit “not comparable” outcomes. **Not started** (see [`eng_roadmap.md`](eng_roadmap.md) §0.0).
+- **Prior chain by bill type** — e.g. Seattle electric vs Seattle water on the same site as separate comparison chains (workaround today: separate sites).
 
 ### Deferred / optional (later — not blocking MVP demo)
-
-Pick these up when a pilot or ops need pushes them; they are intentionally out of the current sprint.
 
 | Item | Why defer |
 |------|-----------|
 | **`total_amount` on `raw_payload`** | Normalized total is sum-of-lines today; add when we need “amount due” vs line-sum integrity checks. |
-| **`site_id` on upload UI** | API/DB already support `site_id`; wire the picker when comparing bills per location matters for users. |
+| **`document_id` filter on `GET /anomalies`** | Inbox filters by document client-side after load; add server-side filter at scale. |
 | **OCR quality hardening** | Tune DPI/thresholds, rendering, and scan coverage tests when scan-heavy bills fail extraction. |
-| **§3c site-to-site comparables** | See **Possible future work** above; eng step **3c** not implemented. |
-| **§3e at extreme scale** | Keyset scans beyond **2000** bills per site if a pilot outgrows current caps. |
+| **§3e at extreme scale** | Raise caps or tiered refresh if a site exceeds **10k** bills. |
 | **§2e internal raw vs normalized viewer** | Support/debug tool beyond the current debug JSON panel. |
-| **§4b LLM “polish” on explanations** | Ship **§4** with templates first; LLM optional behind a flag. |
+| **§4b LLM “polish” on explanations** | Templates shipped; LLM optional behind a flag. |
 | **Inbound email ingestion (eng 1e–1g)** | Presigned upload + CLI is enough for Phase 1. |
-| **P2 retries / idempotency** | Track in eng roadmap; not started. |
+| **P2 retries / idempotency** | Not started; see eng roadmap. |
 
 ---
 
