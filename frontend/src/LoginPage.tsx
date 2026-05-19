@@ -33,7 +33,7 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
   const initialView: AuthView = resetToken?.trim() ? "reset-password" : "sign-in";
   const [view, setView] = useState<AuthView>(initialView);
   const [apiBase, setApiBase] = useState(initialApiBase?.trim() || defaultApiBase);
-  const [email, setEmail] = useState("admin@dev.local");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [otpCode, setOtpCode] = useState("");
@@ -268,10 +268,6 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
                 </p>
                 <p className="hint" style={{ marginTop: "0.75rem", textAlign: "center" }}>
                   Production tenants usually join via an email invite from an org admin.
-                </p>
-                <p className="hint" style={{ marginTop: "0.5rem" }}>
-                  Dev: <code>admin@dev.local</code> / <code>Dev-Admin-Change1!</code> — email verification
-                  is skipped until <code>SMTP_HOST</code> is set.
                 </p>
               </>
             ) : null}

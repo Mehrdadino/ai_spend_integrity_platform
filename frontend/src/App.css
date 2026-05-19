@@ -512,17 +512,13 @@ body {
 
 .card--nested::before { display: none; }
 
-/* ── Doc layout (list + viewer, side by side on wide) ─────────────────────── */
+/* ── Doc layout (full-width list, viewer below when open) ─────────────────── */
+/* Stacked so the uploads table uses the same width as Anomalies (no 50/50 split). */
 .doc-layout {
   display: grid;
+  grid-template-columns: 1fr;
   gap: 1.25rem;
   align-items: start;
-}
-
-@media (min-width: 920px) {
-  .doc-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
 }
 
 .doc-layout-list { margin-top: 1.25rem; }
