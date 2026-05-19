@@ -1114,7 +1114,7 @@ function DocumentViewerPanel({
               {!comparisonLoading && comparison && comparisonIsInfoOnly(comparison) ? (
                 <p className="comparison-baseline-callout" role="status">
                   {comparisonHasNoPriorBill(comparison)
-                    ? "First bill at this site — saved as your baseline. Upload an older month at the same location to unlock month-over-month and new-fee checks. We still ran single-bill integrity checks (header vs lines, duplicate lines, fee share, penalty-style fees, and more)."
+                    ? "First bill at this site — saved as your baseline. Upload more months at the same location; when a second bill is on file, we compare each one to the prior period for month-over-month and new-fee checks. We still ran single-bill integrity checks (header vs lines, duplicate lines, fee share, penalty-style fees, and more)."
                     : "Setup note: assign a site or add history to enable full comparisons. Single-bill integrity checks still run when line data is available."}
                 </p>
               ) : null}
@@ -1143,7 +1143,7 @@ function DocumentViewerPanel({
               {priorBillsLoading ? <p className="hint">Loading prior bills…</p> : null}
               {!priorBillsLoading && priorBills && priorBills.length === 0 ? (
                 <p className="hint">
-                  No older bills for this site yet. Upload another month with the same site selected under Connection.
+                  No prior bills for this site yet. Upload another month at the same site (in the sidebar) to enable comparisons.
                 </p>
               ) : null}
               <p className="hint prior-bills-note">
@@ -1731,8 +1731,10 @@ export function App() {
   }, [apiBase, orgId, file, closeViewer, selectedSiteId, uploadDisplayName]);
 
   const loadDocumentList = useCallback(async () => {
-    if (!apiBase.trim() || !effectiveOrgId) {
-      setDocListError("Set API base URL and Organization ID first.");
+    // Org may still be loading from sidebar — avoid flashing a bogus error (poll / navigation race).
+    if (!apiBase.trim() || !effectiveOrgId || !isUuid(effectiveOrgId)) {
+      setDocRows([]);
+      setDocListError(null);
       return;
     }
     setDocListError(null);
@@ -1901,6 +1903,17 @@ export function App() {
     }
     void loadAnomalyList();
   }, [view, loadAnomalyList]);
+
+  /** Load document list when org context becomes ready (avoids race on first navigation). */
+  useEffect(() => {
+    if (view !== "documents") {
+      return;
+    }
+    if (!apiBase.trim() || !effectiveOrgId || !isUuid(effectiveOrgId)) {
+      return;
+    }
+    void loadDocumentList();
+  }, [view, apiBase, effectiveOrgId, loadDocumentList]);
 
   /** Poll viewer + bill while pipeline may still be running (no full-page reload). */
   useEffect(() => {
@@ -2474,7 +2487,7 @@ export function App() {
                 <p className="hint upload-baseline-note">
                   If this is the <strong>first bill</strong> at{" "}
                   <strong>{siteRows.find((s) => s.id === selectedSiteId)?.name}</strong>, we save it as your
-                  baseline. Upload an <strong>older month</strong> at the same site for month-over-month checks. We
+                  baseline. Upload <strong>more months</strong> at the same site; each new bill is compared to the prior period for month-over-month checks. We
                   still run integrity checks on every bill (header vs lines, duplicate lines, fee share, and more).
                 </p>
               ) : (

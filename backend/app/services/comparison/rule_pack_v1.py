@@ -202,9 +202,10 @@ def evaluate_rule_pack_v1(
                 severity="info",
                 title="First bill at this site (baseline)",
                 summary=(
-                    "This is the first bill we have for this location. Upload an older month at the "
-                    "same site to enable month-over-month and new-fee comparisons. We still ran "
-                    "single-bill integrity checks (header vs lines, duplicate lines, fee share, etc.)."
+                    "This is the first bill we have for this location. Upload additional months at the "
+                    "same site — when a second bill is on file, we compare each one to the immediately "
+                    "prior period for month-over-month and new-fee checks. We still ran single-bill "
+                    "integrity checks (header vs lines, duplicate lines, fee share, etc.)."
                 ),
             )
         )

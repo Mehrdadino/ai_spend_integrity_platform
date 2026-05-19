@@ -32,6 +32,28 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _message_from_error_object(err: object) -> str | None:
+    """Extract a human message from a provider error object (dict, str, or list)."""
+    if isinstance(err, str) and err.strip():
+        return err.strip()
+    if isinstance(err, list):
+        for item in err:
+            msg = _message_from_error_object(item)
+            if msg:
+                return msg
+        return None
+    if isinstance(err, dict):
+        for key in ("message", "detail", "status"):
+            msg = err.get(key)
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+            if isinstance(msg, list):
+                nested = _message_from_error_object(msg)
+                if nested:
+                    return nested
+    return None
+
+
 def _http_error_detail(status_code: int, body: str) -> str:
     """Pull provider message from OpenAI/Gemini error JSON when present."""
     try:
@@ -40,15 +62,155 @@ def _http_error_detail(status_code: int, body: str) -> str:
         snippet = body.strip()[:240]
         return f"LLM HTTP {status_code}" + (f": {snippet}" if snippet else "")
 
-    err = data.get("error")
-    if isinstance(err, dict):
-        msg = err.get("message")
-        if isinstance(msg, str) and msg.strip():
-            return f"LLM HTTP {status_code}: {msg.strip()}"
-    msg = data.get("message")
-    if isinstance(msg, str) and msg.strip():
-        return f"LLM HTTP {status_code}: {msg.strip()}"
+    candidates: list[object] = []
+    if isinstance(data, dict):
+        candidates.append(data)
+    elif isinstance(data, list):
+        candidates.extend(item for item in data if isinstance(item, dict))
+
+    for item in candidates:
+        err = item.get("error") if isinstance(item, dict) else None
+        msg = _message_from_error_object(err) if err is not None else None
+        if msg:
+            return f"LLM HTTP {status_code}: {msg}"
+        if isinstance(item, dict):
+            top = _message_from_error_object(item)
+            if top:
+                return f"LLM HTTP {status_code}: {top}"
+
     return f"LLM HTTP {status_code}"
+
+
+def _coerce_top_level_object(raw: Any, *, label: str) -> dict[str, Any]:
+    """Accept dict or single-element list wrappers from some OpenAI-compatible gateways."""
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                return item
+        raise RuntimeError(f"LLM {label} is a list without an object")
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"LLM {label} must be a JSON object, got {type(raw).__name__}")
+    return raw
+
+
+def _first_choice_dict(raw_resp: dict[str, Any]) -> dict[str, Any]:
+    """Return the first choice/candidate object from an OpenAI- or Gemini-shaped body."""
+    choices = raw_resp.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0]
+        if isinstance(choice, dict):
+            return choice
+        if isinstance(choice, list):
+            for item in choice:
+                if isinstance(item, dict):
+                    return item
+    candidates = raw_resp.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        cand = candidates[0]
+        if isinstance(cand, dict):
+            return cand
+    raise RuntimeError("LLM response missing choices[0] or candidates[0]")
+
+
+def _join_content_parts(parts: object) -> str:
+    """Flatten multipart assistant content (OpenAI list, Gemini parts, nested lists)."""
+    if isinstance(parts, str):
+        return parts.strip()
+    if isinstance(parts, list):
+        chunks = [_text_from_content_part(item) for item in parts]
+        return "\n".join(chunk for chunk in chunks if chunk.strip())
+    if isinstance(parts, dict):
+        return _text_from_content_part(parts)
+    return ""
+
+
+def _text_from_content_part(part: object) -> str:
+    """Coerce one assistant ``content`` element (OpenAI / Gemini shapes) to text."""
+    if isinstance(part, str):
+        return part
+    if isinstance(part, list):
+        nested = [_text_from_content_part(item) for item in part]
+        return "\n".join(chunk for chunk in nested if chunk.strip())
+    if isinstance(part, dict):
+        for key in ("text", "content", "output_text"):
+            value = part.get(key)
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                nested = [_text_from_content_part(item) for item in value]
+                return "\n".join(chunk for chunk in nested if chunk.strip())
+    return ""
+
+
+def _extract_assistant_text(raw: Any) -> str:
+    """Read assistant text from OpenAI ``choices`` or Gemini ``candidates`` response bodies."""
+    raw_resp = _coerce_top_level_object(raw, label="HTTP body")
+    choice = _first_choice_dict(raw_resp)
+
+    message = choice.get("message")
+    if message is None:
+        # Gemini often uses candidates[].content.parts instead of message.content.
+        gemini_content = choice.get("content")
+        if isinstance(gemini_content, dict):
+            parts = gemini_content.get("parts")
+            joined = _join_content_parts(parts)
+            if joined:
+                return joined
+        joined = _join_content_parts(choice.get("content"))
+        if joined:
+            return joined
+        raise RuntimeError("LLM response missing message.content")
+
+    if isinstance(message, str):
+        return message
+
+    if isinstance(message, list):
+        joined = _join_content_parts(message)
+        if joined:
+            return joined
+        raise RuntimeError("LLM message list had no extractable text")
+
+    if not isinstance(message, dict):
+        raise RuntimeError(f"LLM message has unsupported type: {type(message).__name__}")
+
+    content = message.get("content")
+    if content is None:
+        raise RuntimeError("LLM response missing message.content")
+
+    joined = _join_content_parts(content)
+    if joined:
+        return joined
+    raise RuntimeError(f"LLM message content has unsupported type: {type(content).__name__}")
+
+
+def _normalize_llm_bill_dict(data: Any) -> dict[str, Any]:
+    """Coerce common LLM JSON drift (root list, ``lines`` object) before Pydantic validation."""
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                data = item
+                break
+        else:
+            raise RuntimeError("LLM JSON root is a list without an object")
+
+    if not isinstance(data, dict):
+        raise RuntimeError(f"LLM JSON root must be an object, got {type(data).__name__}")
+
+    lines = data.get("lines")
+    if lines is None:
+        data["lines"] = []
+    elif isinstance(lines, dict):
+        items = lines.get("items")
+        if isinstance(items, list):
+            data["lines"] = [row for row in items if isinstance(row, dict)]
+        else:
+            data["lines"] = [row for row in lines.values() if isinstance(row, dict)]
+    elif isinstance(lines, list):
+        data["lines"] = [row for row in lines if isinstance(row, dict)]
+    else:
+        data["lines"] = []
+
+    return data
 
 
 def _strip_json_fences(text: str) -> str:
@@ -134,18 +296,8 @@ def llm_generic_bill_dict(
         logger.warning("extraction_llm: request failed: %s", exc)
         raise
 
-    try:
-        content = raw_resp["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("LLM response missing choices[0].message.content") from exc
-
-    if not isinstance(content, str):
-        raise RuntimeError("LLM message content is not a string")
-
-    data = json.loads(_strip_json_fences(content))
-    if not isinstance(data, dict):
-        raise RuntimeError("LLM JSON root must be an object")
-
+    content = _extract_assistant_text(raw_resp)
+    data = _normalize_llm_bill_dict(json.loads(_strip_json_fences(content)))
     data["document_id"] = str(document.id)
     return data
 
