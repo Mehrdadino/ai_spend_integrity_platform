@@ -1,16 +1,19 @@
+import { zipSync } from "fflate";
+
 /**
  * Minimal pure-TypeScript PDF 1.4 generator for test utility bills.
  *
  * Produces PDFs with an embedded text layer so pypdf (and the LLM extractor)
  * can read them without OCR — making them valid input for the full ingestion
- * + comparison pipeline.
+ * + comparison pipeline. Scenarios align with comparison rule pack **v1.2**
+ * (tax share, domain packs, extraction quality, duplicate lines, etc.).
  *
- * No third-party dependencies; uses only standard browser APIs (Blob).
+ * PDF bytes use only browser APIs; batch ZIP uses ``fflate``.
  */
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
-export type UtilityType = "electricity" | "gas" | "water";
+export type UtilityType = "electricity" | "gas" | "water" | "telecom";
 
 export type ScenarioKey =
   | "normal"
@@ -19,7 +22,15 @@ export type ScenarioKey =
   | "header_mismatch"
   | "penalty_fees"
   | "high_fee_share"
+  | "tax_high_share"
+  | "duplicate_lines"
+  | "credits_exceed"
   | "missing_dates"
+  | "electric_demand_no_kwh"
+  | "water_no_usage"
+  | "gas_no_usage"
+  | "telecom_many_fees"
+  | "sparse_text"
   | "multi_rule";
 
 export interface BillConfig {
@@ -39,37 +50,71 @@ export interface BillConfig {
 // ── Metadata tables ──────────────────────────────────────────────────────────
 
 export const SCENARIO_LABELS: Record<ScenarioKey, string> = {
-  normal:           "Normal bill",
-  mom_spike:        "MoM spike +55%",
-  new_fee:          "New fee line",
-  header_mismatch:  "Header ≠ line sum",
-  penalty_fees:     "Penalty / late fees",
-  high_fee_share:   "High fee share",
-  missing_dates:    "Missing period dates",
-  multi_rule:       "Multi-rule (3+ signals)",
+  normal:                  "Normal bill",
+  mom_spike:               "MoM spike +55%",
+  new_fee:                 "New fee line",
+  header_mismatch:         "Header ≠ line sum",
+  penalty_fees:            "Penalty / late fees",
+  high_fee_share:          "High fee share",
+  tax_high_share:          "High tax share",
+  duplicate_lines:         "Duplicate line items",
+  credits_exceed:          "Credits exceed charges",
+  missing_dates:           "Missing period dates",
+  electric_demand_no_kwh:  "Demand kW, no kWh usage",
+  water_no_usage:          "Water bill, no meter usage",
+  gas_no_usage:            "Gas bill, no therm/CCF usage",
+  telecom_many_fees:       "Telecom fee cluster",
+  sparse_text:             "Sparse PDF text (OCR)",
+  multi_rule:              "Multi-rule v1.2 (5+ signals)",
 };
 
-/** Which comparison rule IDs each scenario is designed to trigger. */
+/** Which comparison rule IDs each scenario is designed to trigger (comparison-v1.2). */
 export const SCENARIO_RULES: Record<ScenarioKey, string[]> = {
-  normal:           [],
-  mom_spike:        ["mom_total_change (critical — 55% over baseline)"],
-  new_fee:          ["new_fee_lines"],
-  header_mismatch:  ["header_total_mismatch"],
-  penalty_fees:     ["penalty_style_fees"],
-  high_fee_share:   ["fees_high_share_of_total"],
-  missing_dates:    ["missing_period_dates"],
-  multi_rule:       ["header_total_mismatch", "penalty_style_fees", "fees_high_share_of_total"],
+  normal:                  [],
+  mom_spike:               ["mom_total_change"],
+  new_fee:                 ["new_fee_lines"],
+  header_mismatch:         ["header_total_mismatch"],
+  penalty_fees:            ["penalty_style_fees"],
+  high_fee_share:          ["fees_high_share_of_total"],
+  tax_high_share:          ["tax_high_share_of_total"],
+  duplicate_lines:         ["duplicate_line_fingerprint"],
+  credits_exceed:          ["credits_exceed_charges"],
+  missing_dates:           ["missing_period_dates"],
+  electric_demand_no_kwh:  ["utility_electric_demand_without_usage"],
+  water_no_usage:          ["utility_water_missing_usage"],
+  gas_no_usage:            ["utility_gas_missing_usage"],
+  telecom_many_fees:       ["telecom_many_fees"],
+  sparse_text:             [
+    "extraction_low_text_quality",
+    "extraction_no_llm_key (if EXTRACTION_LLM_API_KEY unset)",
+    "extraction_few_line_items (stub path)",
+  ],
+  multi_rule:              [
+    "header_total_mismatch",
+    "penalty_style_fees",
+    "fees_high_share_of_total",
+    "tax_high_share_of_total",
+    "duplicate_line_fingerprint",
+  ],
 };
 
 export const SCENARIO_SEVERITY: Record<ScenarioKey, "none" | "info" | "warning" | "critical"> = {
-  normal:           "none",
-  mom_spike:        "critical",
-  new_fee:          "warning",
-  header_mismatch:  "warning",
-  penalty_fees:     "warning",
-  high_fee_share:   "warning",
-  missing_dates:    "info",
-  multi_rule:       "critical",
+  normal:                  "none",
+  mom_spike:               "critical",
+  new_fee:                 "warning",
+  header_mismatch:         "warning",
+  penalty_fees:            "warning",
+  high_fee_share:          "warning",
+  tax_high_share:          "warning",
+  duplicate_lines:         "warning",
+  credits_exceed:          "warning",
+  missing_dates:           "info",
+  electric_demand_no_kwh:  "warning",
+  water_no_usage:          "warning",
+  gas_no_usage:            "warning",
+  telecom_many_fees:       "warning",
+  sparse_text:             "warning",
+  multi_rule:              "critical",
 };
 
 export const MONTH_OFFSETS: { value: number; label: string }[] = [
@@ -122,29 +167,62 @@ export const PRESETS: PresetDef[] = [
   },
   {
     id: "single_issues",
-    label: "Single-Bill Issues",
+    label: "Single-Bill Issues (v1.2)",
     description:
-      "One electricity bill deliberately engineered to fire header mismatch, penalty fees, " +
-      "and high fee share — no prior bill needed.",
+      "One electricity bill engineered for header mismatch, penalties, high fee share, " +
+      "high tax share, and duplicate lines — no prior bill needed.",
     count: 1,
     bills: [
       { siteName: "Site C", monthOffset: -1, utility: "electricity", scenario: "multi_rule" },
     ],
   },
   {
-    id: "full_suite",
-    label: "Full Test Suite (6 bills)",
+    id: "v12_domain_pack",
+    label: "Domain Pack Singles (v1.2)",
     description:
-      "Two sites with MoM history + one bill with penalty fees + one with missing dates. " +
-      "Covers every comparison rule in the rule pack.",
-    count: 6,
+      "Four single bills targeting utility/telecom domain rules: electric demand without kWh, " +
+      "water without meter usage, gas without therm/CCF, and telecom fee cluster.",
+    count: 4,
     bills: [
-      { siteName: "Main Street", monthOffset: -4, utility: "electricity", scenario: "normal"        },
-      { siteName: "Main Street", monthOffset: -2, utility: "electricity", scenario: "normal"        },
-      { siteName: "Main Street", monthOffset:  0, utility: "electricity", scenario: "mom_spike"     },
-      { siteName: "Warehouse",   monthOffset: -3, utility: "gas",         scenario: "normal"        },
-      { siteName: "Warehouse",   monthOffset: -1, utility: "gas",         scenario: "new_fee"       },
-      { siteName: "Downtown",    monthOffset: -1, utility: "water",       scenario: "missing_dates" },
+      { siteName: "Electric Lab", monthOffset: -1, utility: "electricity", scenario: "electric_demand_no_kwh" },
+      { siteName: "Water Lab",    monthOffset: -1, utility: "water",       scenario: "water_no_usage"         },
+      { siteName: "Gas Lab",      monthOffset: -1, utility: "gas",         scenario: "gas_no_usage"           },
+      { siteName: "Telecom Lab",  monthOffset: -1, utility: "telecom",     scenario: "telecom_many_fees"      },
+    ],
+  },
+  {
+    id: "v12_integrity",
+    label: "Integrity Singles (v1.2)",
+    description:
+      "Tax share, duplicate lines, credits exceed charges, and sparse PDF text (extraction quality).",
+    count: 4,
+    bills: [
+      { siteName: "Tax Site",      monthOffset: -1, utility: "electricity", scenario: "tax_high_share"  },
+      { siteName: "Dup Site",      monthOffset: -1, utility: "electricity", scenario: "duplicate_lines" },
+      { siteName: "Credit Site",   monthOffset: -1, utility: "electricity", scenario: "credits_exceed"  },
+      { siteName: "Sparse Scan",   monthOffset: -1, utility: "electricity", scenario: "sparse_text"     },
+    ],
+  },
+  {
+    id: "full_suite",
+    label: "Full Test Suite (12 bills)",
+    description:
+      "MoM history, new fees, domain packs, integrity singles, and legacy scenarios — " +
+      "covers comparison-v1.2 rules end-to-end (LLM key recommended for telecom + line extraction).",
+    count: 12,
+    bills: [
+      { siteName: "Main Street", monthOffset: -4, utility: "electricity", scenario: "normal"                  },
+      { siteName: "Main Street", monthOffset: -2, utility: "electricity", scenario: "normal"                  },
+      { siteName: "Main Street", monthOffset:  0, utility: "electricity", scenario: "mom_spike"               },
+      { siteName: "Warehouse",   monthOffset: -3, utility: "gas",         scenario: "normal"                  },
+      { siteName: "Warehouse",   monthOffset: -1, utility: "gas",         scenario: "new_fee"                 },
+      { siteName: "Downtown",    monthOffset: -1, utility: "water",       scenario: "missing_dates"         },
+      { siteName: "Tax Annex",   monthOffset: -1, utility: "electricity", scenario: "tax_high_share"          },
+      { siteName: "Dup Annex",   monthOffset: -1, utility: "electricity", scenario: "duplicate_lines"         },
+      { siteName: "Elec Lab",    monthOffset: -1, utility: "electricity", scenario: "electric_demand_no_kwh"  },
+      { siteName: "Water Lab",   monthOffset: -1, utility: "water",       scenario: "water_no_usage"          },
+      { siteName: "Gas Lab",     monthOffset: -1, utility: "gas",         scenario: "gas_no_usage"            },
+      { siteName: "Telecom Lab", monthOffset: -1, utility: "telecom",     scenario: "telecom_many_fees"       },
     ],
   },
 ];
@@ -162,6 +240,8 @@ interface BillData {
   tagline: string;
   serviceAddress: string;
   accountNumber: string;
+  /** Shown under account info — helps LLM set ``spend_domain`` / ``spend_kind``. */
+  accountTypeLine: string | null;
   /** null = missing_dates scenario */
   periodStart: string | null;
   periodEnd: string | null;
@@ -170,6 +250,8 @@ interface BillData {
   /** What the PDF "Total Due" header says — may differ from sum of lines. */
   headerTotal: number;
   currency: string;
+  /** When true, render almost no embedded text (triggers sparse-text / OCR path). */
+  sparseTextOnly: boolean;
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
@@ -210,12 +292,22 @@ const COMPANY: Record<UtilityType, string> = {
   electricity: "Pacific Electric Utilities",
   gas:         "Western Gas and Energy Co.",
   water:       "Metro Water Authority",
+  telecom:     "Pacific Telecom Services",
 };
 
 const TAGLINE: Record<UtilityType, string> = {
   electricity: "Reliable Power for Every Customer Since 1952",
   gas:         "Safe, Affordable Natural Gas for Your Home and Business",
   water:       "Clean Water, Healthy Communities",
+  telecom:     "Business Broadband and Voice Services",
+};
+
+/** Hint line written into the PDF for LLM structuring (``spend_domain`` / ``spend_kind``). */
+const ACCOUNT_TYPE: Record<UtilityType, string> = {
+  electricity: "Utility account — electric service",
+  gas:         "Utility account — natural gas service",
+  water:       "Utility account — water and sewer service",
+  telecom:     "Telecom account — broadband internet service",
 };
 
 function sum(items: LineItem[]): number {
@@ -228,6 +320,7 @@ function buildBillData(cfg: BillConfig): BillData {
   let periodEnd:   string | null = dates.periodEnd;
   let items: LineItem[];
   let headerTotal: number;
+  let sparseTextOnly = false;
 
   switch (cfg.scenario) {
     // ── Normal baseline ──
@@ -246,6 +339,12 @@ function buildBillData(cfg: BillConfig): BillData {
           { label: "Delivery charge",          detail: "",                         amount:  14.50 },
           { label: "State tax",                detail: "5.5% of charges",         amount:   4.25 },
           { label: "Regulatory charge",        detail: "",                         amount:   2.10 },
+        ];
+      } else if (cfg.utility === "telecom") {
+        items = [
+          { label: "Business internet",     detail: "200 Mbps fiber",            amount:  79.00 },
+          { label: "Equipment rental fee",  detail: "Gateway modem",           amount:   9.00 },
+          { label: "State telecom tax",     detail: "5.5% of charges",           amount:   4.85 },
         ];
       } else {
         items = [
@@ -425,6 +524,159 @@ function buildBillData(cfg: BillConfig): BillData {
       headerTotal = sum(items);
       break;
 
+    // ── Tax lines are a large share of total (v1.2 tax_high_share_of_total) ──
+    case "tax_high_share":
+      if (cfg.utility === "electricity") {
+        items = [
+          { label: "Energy usage",          detail: "420 kWh @ $0.1200/kWh",     amount:  50.40 },
+          { label: "Basic service charge",  detail: "",                            amount:  12.50 },
+          { label: "State sales tax",       detail: "8.5% of taxable charges",    amount:   6.80 },
+          { label: "City utility tax",      detail: "",                            amount:   5.25 },
+          { label: "County use tax",        detail: "",                            amount:   4.90 },
+          { label: "Public purpose charge", detail: "",                            amount:   3.10 },
+        ];
+      } else if (cfg.utility === "gas") {
+        items = [
+          { label: "Natural gas supply",    detail: "28 CCF @ $1.2800/CCF",       amount:  35.84 },
+          { label: "Gas distribution",      detail: "",                            amount:   9.00 },
+          { label: "State tax",             detail: "8.5% of charges",            amount:   4.50 },
+          { label: "City franchise tax",    detail: "",                            amount:   3.75 },
+          { label: "County tax",            detail: "",                            amount:   3.20 },
+        ];
+      } else if (cfg.utility === "telecom") {
+        items = [
+          { label: "Business internet",     detail: "100 Mbps plan",             amount:  55.00 },
+          { label: "State telecom tax",     detail: "8.5%",                      amount:   6.50 },
+          { label: "City utility tax",      detail: "",                            amount:   5.00 },
+          { label: "Federal USF surcharge", detail: "",                            amount:   4.25 },
+        ];
+      } else {
+        items = [
+          { label: "Consumption charge",    detail: "10 CCF @ $4.2500/CCF",       amount:  42.50 },
+          { label: "Water basic service",   detail: "",                            amount:   8.00 },
+          { label: "State tax",             detail: "8.5%",                      amount:   5.50 },
+          { label: "City tax",              detail: "",                            amount:   4.25 },
+          { label: "County tax",            detail: "",                            amount:   3.80 },
+        ];
+      }
+      headerTotal = sum(items);
+      break;
+
+    // ── Duplicate line fingerprints on one invoice ──
+    case "duplicate_lines":
+      if (cfg.utility === "electricity") {
+        items = [
+          { label: "Energy usage",          detail: "820 kWh @ $0.1200/kWh",     amount:  98.40 },
+          { label: "Energy usage",          detail: "820 kWh @ $0.1200/kWh",     amount:  98.40 },
+          { label: "Basic service charge",  detail: "",                            amount:  12.50 },
+          { label: "State tax",             detail: "5.5% of usage charges",      amount:  11.50 },
+        ];
+      } else if (cfg.utility === "gas") {
+        items = [
+          { label: "Natural gas supply",    detail: "42 CCF @ $1.2800/CCF",     amount:  53.76 },
+          { label: "Natural gas supply",    detail: "42 CCF @ $1.2800/CCF",     amount:  53.76 },
+          { label: "Delivery charge",       detail: "",                          amount:  14.50 },
+          { label: "State tax",             detail: "5.5% of charges",          amount:   6.50 },
+        ];
+      } else if (cfg.utility === "telecom") {
+        items = [
+          { label: "Monthly service",       detail: "Fiber 200 Mbps",           amount:  79.00 },
+          { label: "Monthly service",       detail: "Fiber 200 Mbps",           amount:  79.00 },
+          { label: "State tax",             detail: "",                          amount:   6.50 },
+        ];
+      } else {
+        items = [
+          { label: "Consumption charge",    detail: "12 CCF @ $4.2500/CCF",     amount:  51.00 },
+          { label: "Consumption charge",    detail: "12 CCF @ $4.2500/CCF",     amount:  51.00 },
+          { label: "Sewer service",         detail: "",                          amount:   3.50 },
+          { label: "Sales tax",             detail: "5.5%",                      amount:   5.80 },
+        ];
+      }
+      headerTotal = sum(items);
+      break;
+
+    // ── Credits larger than other positive charges ──
+    case "credits_exceed":
+      if (cfg.utility === "electricity") {
+        items = [
+          { label: "Energy usage",              detail: "600 kWh @ $0.1200/kWh", amount:  72.00 },
+          { label: "Bill credit adjustment",    detail: "Prior period correction", amount: -95.00 },
+          { label: "State tax",                 detail: "5.5% of charges",        amount:   3.20 },
+        ];
+      } else if (cfg.utility === "gas") {
+        items = [
+          { label: "Natural gas supply",        detail: "35 CCF @ $1.2800/CCF",  amount:  44.80 },
+          { label: "Account credit",            detail: "Overpayment refund",    amount: -60.00 },
+          { label: "State tax",                 detail: "5.5%",                 amount:   2.50 },
+        ];
+      } else if (cfg.utility === "telecom") {
+        items = [
+          { label: "Internet service",          detail: "",                      amount:  45.00 },
+          { label: "Promotional credit",        detail: "Bundle adjustment",     amount: -55.00 },
+        ];
+      } else {
+        items = [
+          { label: "Consumption charge",        detail: "8 CCF @ $4.2500/CCF",  amount:  34.00 },
+          { label: "Water bill credit",         detail: "Billing correction",    amount: -48.00 },
+        ];
+      }
+      headerTotal = sum(items);
+      break;
+
+    // ── Electric demand (kW) without kWh usage lines ──
+    case "electric_demand_no_kwh":
+      items = [
+        { label: "Basic service charge",  detail: "",                              amount:  12.50 },
+        { label: "Demand charge",         detail: "Peak demand 52 kW @ $1.85/kW", amount:  96.20 },
+        { label: "Transmission charge",   detail: "",                              amount:  18.40 },
+        { label: "State tax",             detail: "5.5% of charges",              amount:   7.10 },
+      ];
+      headerTotal = sum(items);
+      break;
+
+    // ── Water bill with no gallon/CCF usage quantities ──
+    case "water_no_usage":
+      items = [
+        { label: "Water basic service",     detail: "Flat monthly service",       amount:  28.00 },
+        { label: "Sewer service charge",    detail: "",                            amount:  15.00 },
+        { label: "Stormwater fee",          detail: "",                            amount:   8.00 },
+        { label: "Fire protection charge",  detail: "",                            amount:   6.50 },
+        { label: "Sales tax",               detail: "5.5%",                        amount:   3.20 },
+      ];
+      headerTotal = sum(items);
+      break;
+
+    // ── Gas bill with no therm/CCF metered usage ──
+    case "gas_no_usage":
+      items = [
+        { label: "Gas customer charge",       detail: "Monthly service",           amount:  22.00 },
+        { label: "Gas distribution charge",   detail: "",                          amount:   9.00 },
+        { label: "Pipeline safety surcharge", detail: "",                          amount:   6.50 },
+        { label: "State tax",                 detail: "5.5% of charges",          amount:   2.80 },
+      ];
+      headerTotal = sum(items);
+      break;
+
+    // ── Telecom: many fee lines (v1.2 telecom_many_fees) ──
+    case "telecom_many_fees":
+      items = [
+        { label: "Business internet",           detail: "200 Mbps fiber",          amount:  55.00 },
+        { label: "Regulatory recovery fee",     detail: "",                        amount:  12.50 },
+        { label: "Franchise fee surcharge",     detail: "",                        amount:  10.00 },
+        { label: "Equipment rental fee",        detail: "Gateway modem",           amount:   9.00 },
+        { label: "Administrative processing fee", detail: "",                      amount:   6.50 },
+        { label: "State telecom tax",           detail: "5.5%",                    amount:   5.20 },
+      ];
+      headerTotal = sum(items);
+      break;
+
+    // ── Almost no embedded text (< 40 chars) for extraction_low_text_quality ──
+    case "sparse_text":
+      sparseTextOnly = true;
+      items = [];
+      headerTotal = 0;
+      break;
+
     // ── No billing period dates on the bill ──
     case "missing_dates":
       periodStart = null;
@@ -456,10 +708,11 @@ function buildBillData(cfg: BillConfig): BillData {
       headerTotal = sum(items);
       break;
 
-    // ── Multiple rules: header mismatch + penalty fees + high fee share ──
+    // ── Multiple v1.2 rules on one bill (no prior required) ──
     case "multi_rule":
       if (cfg.utility === "electricity") {
         items = [
+          { label: "Energy usage",                  detail: "500 kWh @ $0.1200/kWh",       amount:  60.00 },
           { label: "Energy usage",                  detail: "500 kWh @ $0.1200/kWh",       amount:  60.00 },
           { label: "Basic service charge",           detail: "",                             amount:  12.50 },
           { label: "Late payment penalty",           detail: "Account 60 days past due",    amount:  25.00 },
@@ -467,8 +720,9 @@ function buildBillData(cfg: BillConfig): BillData {
           { label: "Grid modernization fee",         detail: "",                             amount:  14.50 },
           { label: "Reliability surcharge",          detail: "",                             amount:  11.00 },
           { label: "Environmental recovery fee",     detail: "",                             amount:   9.20 },
-          { label: "Regulatory compliance fee",      detail: "",                             amount:   7.90 },
-          { label: "State tax",                      detail: "5.5% of charges",              amount:   9.90 },
+          { label: "State sales tax",                detail: "8.5% of taxable charges",     amount:   8.50 },
+          { label: "City utility tax",               detail: "",                             amount:   6.25 },
+          { label: "County use tax",                 detail: "",                             amount:   5.10 },
         ];
       } else if (cfg.utility === "gas") {
         items = [
@@ -507,12 +761,14 @@ function buildBillData(cfg: BillConfig): BillData {
     tagline:       TAGLINE[cfg.utility],
     serviceAddress: `${cfg.siteName}, Portland, OR 97201`,
     accountNumber: acctNum(cfg.siteName),
+    accountTypeLine: ACCOUNT_TYPE[cfg.utility],
     periodStart,
     periodEnd,
     issueDate:     dates.issueDate,
     lineItems:     items,
     headerTotal,
     currency:      "USD",
+    sparseTextOnly,
   };
 }
 
@@ -533,6 +789,14 @@ function asciiSafe(s: string): string {
 
 /** Build the PDF page content stream for one bill. Returns a pure-ASCII string. */
 function buildPageStream(data: BillData): string {
+  // Sparse scan-style PDF: minimal embedded text to trigger OCR / low-text-quality rules.
+  if (data.sparseTextOnly) {
+    const cmds: string[] = ["BT", "0 0 0 rg", "/F2 10 Tf", "1 0 0 1 50 400 Tm"];
+    cmds.push(`${ps("SCAN")} Tj`);
+    cmds.push("ET");
+    return cmds.join("\n");
+  }
+
   const cmds: string[] = [];
 
   // Inner helpers — all push to cmds
@@ -581,6 +845,13 @@ function buildPageStream(data: BillData): string {
   txt(50, 692, "Account Number");
   font(2, 9, 0, 0, 0);
   txt(165, 692, data.accountNumber);
+
+  if (data.accountTypeLine) {
+    font(2, 8, 0.50, 0.50, 0.50);
+    txt(50, 676, "Account Type");
+    font(2, 9, 0, 0, 0);
+    txt(165, 676, data.accountTypeLine);
+  }
 
   // Account info — right column
   font(2, 8, 0.50, 0.50, 0.50);
@@ -702,4 +973,32 @@ export function getFilename(cfg: BillConfig): string {
     cfg.monthOffset === -1 ? "last-month" :
     `${Math.abs(cfg.monthOffset)}mo-ago`;
   return `${site}-${mo}-${cfg.scenario}.pdf`;
+}
+
+export interface ZipPdfEntry {
+  blob: Blob;
+  filename: string;
+}
+
+/**
+ * Bundle PDF blobs into one ZIP (avoids browser ~10 automatic download cap).
+ */
+export async function zipGeneratedPdfs(items: ZipPdfEntry[]): Promise<Blob> {
+  const entries: Record<string, Uint8Array> = {};
+  const used = new Set<string>();
+
+  await Promise.all(
+    items.map(async (item) => {
+      let name = item.filename;
+      let suffix = 2;
+      while (used.has(name)) {
+        name = item.filename.replace(/\.pdf$/i, `-${suffix}.pdf`);
+        suffix += 1;
+      }
+      used.add(name);
+      entries[name] = new Uint8Array(await item.blob.arrayBuffer());
+    }),
+  );
+
+  return new Blob([zipSync(entries)], { type: "application/zip" });
 }

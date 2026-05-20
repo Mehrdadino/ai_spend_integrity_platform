@@ -46,13 +46,14 @@ class PresignedUploadResponse(BaseModel):
 
 
 class CompleteUploadResponse(BaseModel):
-    """Row is ``queued``; worker advances through ``received`` / ``extracted`` (2a) or ``failed``."""
+    """Row is ``queued``; worker advances to ``extracted``, ``unsupported``, or ``failed``."""
 
     document_id: UUID
     sha256: str
     byte_size: int
     processing_status: str
     processing_error: Optional[str] = None
+    unsupported_reason: Optional[str] = None
 
 
 class DeleteDocumentResponse(BaseModel):
@@ -68,6 +69,7 @@ class ReprocessDocumentResponse(BaseModel):
     document_id: UUID
     processing_status: str
     processing_error: Optional[str] = None
+    unsupported_reason: Optional[str] = None
 
 
 class RawExtractionSnapshotResponse(BaseModel):
@@ -129,6 +131,14 @@ class DocumentDetailResponse(BaseModel):
     source: str
     processing_status: str
     processing_error: Optional[str] = None
+    unsupported_reason_code: Optional[str] = Field(
+        None,
+        description="Machine code for unsupported (e.g. no_line_items, stub_ignored_text).",
+    )
+    unsupported_reason: Optional[str] = Field(
+        None,
+        description="Why the file is not treated as a utility bill when status is ``unsupported``.",
+    )
     created_at: datetime
     latest_raw_extraction: Optional[RawExtractionSnapshotResponse] = None
 
@@ -168,6 +178,8 @@ class DocumentListItemResponse(BaseModel):
     source: str
     processing_status: str
     processing_error: Optional[str] = None
+    unsupported_reason_code: Optional[str] = None
+    unsupported_reason: Optional[str] = None
     anomaly_review_status: Optional[str] = Field(
         None,
         description=(

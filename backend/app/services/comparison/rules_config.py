@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-RULE_PACK_VERSION = "comparison-v1.1"
+RULE_PACK_VERSION = "comparison-v1.2"
 
 # Month-over-month total (current vs immediate prior bill).
 MOM_PERCENT_WARNING = Decimal("10")  # |delta %| >= 10 → warning
@@ -25,3 +25,10 @@ PENALTY_FEE_LABEL_PATTERN = (
     r"late\s*(payment|fee)?|reconnect|disconnect|penalty|collection\s*fee|"
     r"returned\s*check|insufficient\s*funds|nsf"
 )
+
+# Tax share of bill total (single-bill; complements fee share).
+TAX_SHARE_WARNING_PCT = Decimal("8")  # tax sum >= 8% of bill total → warning
+TAX_SHARE_MIN_TOTAL = Decimal("25")  # ignore tiny totals (same floor as fees)
+
+# Extraction quality: few structured lines on a text-rich PDF.
+EXTRACTION_MIN_LINE_COUNT = 2

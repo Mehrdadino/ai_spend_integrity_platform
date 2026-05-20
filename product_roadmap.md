@@ -20,7 +20,7 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-19
+## Implementation status (repository) — 2026-05-20
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
@@ -36,30 +36,111 @@ Just:
 - **Platform admin** still sees all orgs; dev **`X-Organization-Id`** when `AUTH_ALLOW_DEV_ORG_HEADER=true`.
 - **Production hardening:** Redis **rate limits** (e.g. **3/15min** per email on forgot/register/invite, **5/15min** login, **10/min** per IP); **lockout** after **5** failed sign-ins; security headers; production startup validation.
 - **§3a prior bills:** `get_prior_bills_for_bill` + **`GET …/bill/prior-bills`** (same org, same `site_id`; period ordering); prior-bill table in document viewer.
-- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; rule pack **`comparison-v1.1`** — **single-bill integrity** on every bill (no prior): header vs lines, duplicate line fingerprints, high fee share, penalty-style fee labels, missing period dates, credits vs charges; with history: MoM total, new fee lines; **`GET /api/v1/anomalies`** (+ detail) with **template explanations** and **grounding** from saved evidence; **`POST …/materialize-comparisons`** for inbox **Refresh**.
+- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; rule pack **`comparison-v1.2`** — **single-bill integrity** on every bill (no prior): header vs lines, duplicate lines, high fee/tax share, penalty fees, missing period dates, credits vs charges, **extraction-quality** signals from ``bills.summary``, **utility/telecom domain packs** (electric demand without kWh, water/gas missing usage, telecom fee clusters); with history: MoM total, new fee lines; **labeled golden cases** in ``backend/tests/comparison_labeled_cases.py`` for rule recall regression; **`GET /api/v1/anomalies`** (+ detail) with **template explanations** and **grounding**; **`POST …/materialize-comparisons`** for inbox **Refresh**.
 - **§3e comparison backfill:** After worker upsert, **bounded site-wide** comparison when the bill has a `site_id` (correct priors after mid-timeline insert/delete). **Site change** refreshes the new site (via backfill) and the **previous** site when the bill moved. **Soft delete** triggers site-wide refresh. Keyset walk; cap `SITE_BILL_REFRESH_MAX_BILLS` (default 10,000).
 - **§5 review workflow:** `review_status` + **`anomaly_review_events`**; **`POST …/anomalies/{id}/review`**; inbox **Review status** filter; per-row **Actions** (approve / dismiss / flag / reopen) with **§5e notes** and **History**.
 - **Anomalies inbox UX:** signals **grouped by bill/document**; optional **display name** on list/API; **Filter by bill** — searchable, paginated **`GET /documents/browse`**; **View bill** on group; row click opens document (text can be highlighted without navigating). **Documents** tab **Signals** link and viewer **View in signals inbox** jump to filtered Anomalies.
 - **Document labels & delete:** optional **`display_name`** — set on upload, edit/clear in viewer, **`PATCH …/display-name`**; soft delete **`DELETE …/documents/{id}`** + UI **Delete** (S3 bytes retained until hard delete).
+- **Invalid / non-utility uploads:** worker sets **`processing_status=unsupported`** + **`unsupported_reason`** (not **`failed`**); no **`bills`** row or comparison — e.g. random text, LLM fallback/stub on real PDFs, empty lines (**``document_validity``**).
 
 ### Still to build for Phase 1 MVP
 
 - **Auth / org (deferred):** SSO (OIDC/SAML), email verification on signup/change-email, revoke-all-sessions, auth audit log, TOTP app 2FA, per-org domain allowlist, seat billing.
 - **§3c** site-to-site comparables (cross-location; not started).
-- **Real-bill pilot** — production LLM structuring quality and more **single-bill** / domain rules on real PDFs.
+- **Real-bill pilot** — production LLM structuring quality on real PDFs; extend labeled golden set from pilot disputes.
 - **P2** — worker retries and upload idempotency hardening.
 
 ### Recommended next focus (product ↔ eng)
 
-- **Real-bill pilot** — `EXTRACTION_LLM_API_KEY`, validate normalization on real utility PDFs; extend **single-bill integrity** (extraction-quality warnings, tax share, domain packs).
+- **Real-bill pilot** — `EXTRACTION_LLM_API_KEY`, validate normalization on real utility PDFs; grow labeled set from pilot PDFs.
 - **§3c** — site-to-site comparables when a pilot needs cross-location views.
 - **P2** — worker retries + idempotency.
 - **Comparison chain by utility type** — optional split of priors by `spend_domain` / service (today: one chain per site only).
 
 ### Possible future work (comparison breadth)
 
-- **§3c — site-to-site comparables:** compare normalized usage/charges across locations when categories and units align, with explicit “not comparable” outcomes. **Not started** (see [`eng_roadmap.md`](eng_roadmap.md) §0.0).
+- **§3c — site-to-site comparables** — product spec below (peers + three starter rules). **Not started** in code (see [`eng_roadmap.md`](eng_roadmap.md) §0.0).
 - **Prior chain by bill type** — e.g. Seattle electric vs Seattle water on the same site as separate comparison chains (workaround today: separate sites).
+
+---
+
+## Cross-site comparison (§3c) — product spec (draft)
+
+**Status:** Not implemented. Same-site MoM / new-fee (**§3b**, per `site_id`) remains the default on every bill.
+
+### Why this exists (business)
+
+Multi-location operators (grocery, cold storage, property portfolios) sometimes ask:
+
+- “Is **this store** unusual, or did **everyone** get the same rate hike / new fee?”
+- “Which sites look like **outliers** for usage or delivery $/unit this month?”
+
+That is **portfolio / peer benchmarking**, not “replace last month at this site.”
+
+### What we will **not** do
+
+| Anti-pattern | Why |
+|--------------|-----|
+| Compare every new bill to **all** bills at **all** other sites on upload | Wrong units, huge false-positive rate, slow, not how AP reviews a bill |
+| Use cross-site as the **only** comparison | Day-to-day work is still **this site vs last month** |
+| Infer peers from PDF text alone | Peers come from **org + site + normalized service/unit**, not address strings on the invoice |
+
+### Peer group (comparability gate)
+
+A bill is evaluated against a **peer set**, not the whole org.
+
+**Include another site’s bill in the peer set only when:**
+
+1. Same **organization**.
+2. Same **`spend_domain`** (e.g. utility — not utility vs telecom).
+3. Same **service slice** — same `spend_kind` and/or `canonical_service_key` (e.g. `utility_electric` only vs other electric accounts).
+4. Same **billing period window** — e.g. `period_end` in the same calendar month as the anchor bill (configurable slack ± few days).
+5. **Minimum peer count** — at least **3 other sites** with a qualifying bill in that window (pilot-tunable). Fewer → outcome **`not_comparable_insufficient_peers`** (info, no outlier math).
+
+**Optional later (site metadata):** region, climate zone, sq ft band, “similar store” tag — user-defined peer groups override auto peers.
+
+**Outcomes (always explicit):**
+
+- `comparable` — peer math ran; anomalies may be created.
+- `not_comparable_insufficient_peers` — not enough sites in the slice.
+- `not_comparable_mixed_units` — anchor has usage quantity but peers lack the same `quantity_unit`.
+- `not_comparable_wrong_domain` — e.g. water bill in an electric peer request.
+
+### When to run (not on every upload by default)
+
+- **Phase 2 / pilot-driven:** optional rule pack (e.g. `comparison-peer-v1`) run via **`POST …/materialize-comparisons`**, a **scheduled job**, or an org setting — **not** bundled into the hot path for every document worker completion unless a pilot explicitly wants it.
+- Reuse normalized rows from **§2d**; no LLM in the compare step.
+
+### Starter rules (ship §3c as these three)
+
+| Rule ID | Question it answers | Fire when | Severity | Evidence to store |
+|---------|---------------------|-----------|----------|-------------------|
+| **`peer_fee_line_rare`** | “Is this fee **only here**?” | Anchor bill has fee line fingerprint **F**; **≤1** peer bill in the window also has **F**; anchor has **≥2** peers total | `warning` | `fingerprint`, `peer_count`, `peers_with_fee`, `peer_site_ids[]`, `period_window` |
+| **`peer_fee_line_widespread`** | “Did **everyone** get this new fee?” | **F** appears on anchor and on **≥80%** of peer bills in the window (portfolio rollout / rate case) | `info` | Same as above + `prevalence_pct` |
+| **`peer_usage_or_total_outlier`** | “Is this site high vs **similar** sites?” | Comparable unit exists (e.g. total kWh, $/kWh, bill total for same service); anchor value **> peer p75 × 1.25** or **> 2× peer median** (tune constants); **≥3** peers | `warning` | `metric`, `anchor_value`, `peer_median`, `peer_p75`, `peer_count`, `unit`, `period_window` |
+
+**Not in v1 of §3c (defer):** full “compare anchor to every line at every site”; demand vs usage cross-checks across sites; automatic peer discovery without service/unit gates.
+
+### Example narratives (for §4 templates later)
+
+- **Rare fee:** “Late payment rider appears on this bill but on only 1 of 11 peer electric accounts for March 2026.”
+- **Widespread fee:** “Grid modernization surcharge appears on 9 of 10 peer accounts — likely a utility-wide charge, not a single-store error.”
+- **Outlier:** “March kWh at this site is 2.1× the peer median for electric accounts in the same month.”
+
+### Relation to same-site rules
+
+| Layer | Scope | Example |
+|-------|--------|---------|
+| **§3b (shipped)** | One `site_id` timeline | MoM total up 27% vs **last month at this site** |
+| **§3c (this spec)** | Peer set within org | MoM up 27% **and** peers flat → local issue; MoM up **and** peers up → utility-wide |
+
+### Engineering guardrails (for `eng_roadmap.md`)
+
+- New module e.g. `peer_pack_v1.py`; separate **`rule_pack_version`** so inbox can filter peer vs site anomalies.
+- SQL: “bills for org + period window + service key,” capped (e.g. max 50 peer bills), not cartesian all-documents.
+- Unit tests with 4–5 synthetic sites in one org; golden cases like §3b labeled harness.
+
+**Build trigger:** first design partner asks for portfolio-level fee or usage outlier questions; until then, **§3c stays out of the repo**.
 
 ### Deferred / optional (later — not blocking MVP demo)
 

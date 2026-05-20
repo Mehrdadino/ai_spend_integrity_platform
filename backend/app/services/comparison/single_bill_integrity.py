@@ -1,8 +1,9 @@
 """§3b single-bill integrity rules (no prior bill required).
 
 First-time users often upload one suspicious bill with no site history. These deterministic
-checks inspect **this bill only**: math consistency (header rule lives in ``rule_pack_v1``),
-duplicate lines, fee share, penalty-style fees, and sparse period metadata.
+checks inspect **this bill only**: duplicate lines, fee/tax share, penalty-style fees,
+sparse period metadata, extraction provenance (``extraction_quality``), and utility/telecom
+domain packs (``domain_packs``). Header-vs-lines math lives in ``rule_pack_v1``.
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ from collections import Counter
 from decimal import Decimal
 from typing import Any, Sequence
 
-from app.constants.normalization import LINE_KIND_CREDIT, LINE_KIND_FEE
+from app.constants.normalization import LINE_KIND_CREDIT, LINE_KIND_FEE, LINE_KIND_TAX
+from app.services.comparison.domain_packs import evaluate_domain_packs
+from app.services.comparison.extraction_quality import evaluate_extraction_quality
 from app.models.bill import Bill
 from app.models.bill_line_item import BillLineItem
 from app.schemas.comparison import ComparisonFindingResponse, ComparisonSeverity
@@ -22,6 +25,8 @@ from app.services.comparison.rules_config import (
     FEES_SHARE_MIN_TOTAL,
     FEES_SHARE_WARNING_PCT,
     PENALTY_FEE_LABEL_PATTERN,
+    TAX_SHARE_MIN_TOTAL,
+    TAX_SHARE_WARNING_PCT,
 )
 
 _PENALTY_RE = re.compile(PENALTY_FEE_LABEL_PATTERN, re.IGNORECASE)
@@ -171,6 +176,36 @@ def _check_missing_period_dates(current: Bill) -> ComparisonFindingResponse | No
     )
 
 
+def _check_tax_share_of_total(current: Bill) -> ComparisonFindingResponse | None:
+    """Warn when tax lines are a large share of the bill total (common audit target)."""
+    if current.total_amount is None or current.total_amount <= 0:
+        return None
+    if current.total_amount < TAX_SHARE_MIN_TOTAL:
+        return None
+    tax_sum = _sum_amounts_for_kinds(current.line_items, {LINE_KIND_TAX})
+    if tax_sum <= 0:
+        return None
+    pct = (tax_sum / current.total_amount) * Decimal("100")
+    if pct < TAX_SHARE_WARNING_PCT:
+        return None
+    return _finding(
+        rule_id="tax_high_share_of_total",
+        severity="warning",
+        title="Taxes are a large share of this bill",
+        summary=(
+            f"Tax lines sum to {format_money(tax_sum)} {current.currency} "
+            f"({format_percent(pct)}% of the bill total {format_money(current.total_amount)} {current.currency}). "
+            "Confirm tax jurisdiction lines were not misclassified as charges."
+        ),
+        evidence={
+            "tax_sum": format_money(tax_sum),
+            "bill_total": format_money(current.total_amount),
+            "tax_percent": float(format_percent(pct)),
+            "currency": current.currency,
+        },
+    )
+
+
 def _check_credits_exceed_positive_charges(lines: Sequence[BillLineItem], *, currency: str) -> ComparisonFindingResponse | None:
     """Credits larger than non-credit charges may indicate a net credit bill or extraction issues."""
     credit_sum = abs(_sum_amounts_for_kinds(lines, {LINE_KIND_CREDIT}))
@@ -212,6 +247,7 @@ def evaluate_single_bill_integrity(current: Bill) -> list[ComparisonFindingRespo
     for check in (
         lambda: _check_duplicate_line_fingerprints(lines, currency=currency),
         lambda: _check_fees_share_of_total(current),
+        lambda: _check_tax_share_of_total(current),
         lambda: _check_penalty_style_fees(lines, currency=currency),
         lambda: _check_missing_period_dates(current),
         lambda: _check_credits_exceed_positive_charges(lines, currency=currency),
@@ -219,4 +255,7 @@ def evaluate_single_bill_integrity(current: Bill) -> list[ComparisonFindingRespo
         result = check()
         if result is not None:
             findings.append(result)
+
+    findings.extend(evaluate_extraction_quality(current))
+    findings.extend(evaluate_domain_packs(current))
     return findings

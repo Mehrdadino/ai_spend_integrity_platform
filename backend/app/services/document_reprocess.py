@@ -23,7 +23,7 @@ from app.repositories.documents import get_document_for_organization
 
 # Terminal / stuck / retryable pipeline states (includes ``queued`` for crash recovery).
 _STATUSES_REPROCESSABLE = frozenset(
-    {"extracted", "failed", "received", "queued", "pending"},
+    {"extracted", "unsupported", "failed", "received", "queued", "pending"},
 )
 
 
@@ -57,6 +57,8 @@ def prepare_document_for_pipeline_reprocess(session: Session, *, document: Docum
         )
     document.processing_status = "queued"
     document.processing_error = None
+    document.unsupported_reason = None
+    document.unsupported_reason_code = None
     session.flush()
 
 

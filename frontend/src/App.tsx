@@ -54,6 +54,7 @@ import {
   presignUpload,
   putFileToPresignedUrl,
   reprocessDocument,
+  UNSUPPORTED_REPROCESS_MAY_HELP_CODES,
   type AnomalyReviewStatus,
   type BillResponse,
   type CompleteUploadResponse,
@@ -474,6 +475,9 @@ function statusPillClass(status: string): string {
   if (status === "extracted") {
     return `${base} ${base}--extracted`;
   }
+  if (status === "unsupported") {
+    return `${base} ${base}--unsupported`;
+  }
   return base;
 }
 
@@ -781,11 +785,21 @@ function DocumentViewerPanel({
     !!reprocessError ||
     !!deleteError;
   const reprocessBlocked = !viewer || viewer.processing_status === "awaiting_object";
+  const unsupportedReprocessOk =
+    viewer?.processing_status === "unsupported" &&
+    viewer.unsupported_reason_code != null &&
+    UNSUPPORTED_REPROCESS_MAY_HELP_CODES.has(viewer.unsupported_reason_code);
+  const showReprocessButton =
+    onReprocess &&
+    !reprocessBlocked &&
+    (viewer?.processing_status !== "unsupported" || unsupportedReprocessOk);
   const reprocessTitle = reprocessBlocked
     ? !viewer
       ? "Open a finalized document first."
       : "Finalize the upload before reprocessing."
-    : "Re-enqueue extraction + bill sync (safe after RQ crashes; may append another raw extraction).";
+    : unsupportedReprocessOk
+      ? "Re-run extraction on this same file (e.g. after EXTRACTION_LLM_API_KEY was added)."
+      : "Re-enqueue extraction + bill sync (safe after RQ crashes; may append another raw extraction).";
   if (!showPanel) {
     return null;
   }
@@ -810,11 +824,11 @@ function DocumentViewerPanel({
           ) : null}
         </h2>
         <div className="doc-viewer-toolbar-actions">
-          {onReprocess ? (
+          {showReprocessButton ? (
             <button
               type="button"
               className="secondary"
-              disabled={reprocessBusy || deleteBusy || reprocessBlocked}
+              disabled={reprocessBusy || deleteBusy}
               title={reprocessTitle}
               onClick={() => onReprocess()}
             >
@@ -952,6 +966,12 @@ function DocumentViewerPanel({
                 <dd className="cell-error-inline">{viewer.processing_error}</dd>
               </>
             ) : null}
+            {viewer.processing_status === "unsupported" && viewer.unsupported_reason ? (
+              <>
+                <dt>Notice</dt>
+                <dd className="unsupported-notice">{viewer.unsupported_reason}</dd>
+              </>
+            ) : null}
             <dt>MIME</dt>
             <dd className="cell-mono">{viewer.mime_type}</dd>
             <dt>Size</dt>
@@ -975,7 +995,25 @@ function DocumentViewerPanel({
           ) : null}
         </>
       ) : null}
-      {billLoading || billError || bill !== null ? (
+      {viewer?.processing_status === "unsupported" ? (
+        <div className="bill-section">
+          <h3 className="bill-section-title">Not a utility bill</h3>
+          <p className="hint">
+            This file was processed but is not saved as a bill, so comparison and signals are not run.{" "}
+            {unsupportedReprocessOk ? (
+              <>
+                You can <strong>Reprocess</strong> the same file only if extraction settings changed (for example
+                EXTRACTION_LLM_API_KEY was added). Otherwise{" "}
+              </>
+            ) : (
+              <>
+                <strong>Reprocess will not change the file</strong> — it only re-reads the same upload.{" "}
+              </>
+            )}
+            <strong>Delete</strong> this document, then upload a utility invoice PDF from the Upload tab.
+          </p>
+        </div>
+      ) : billLoading || billError || bill !== null ? (
         <div className="bill-section">
           <h3 className="bill-section-title">Normalized bill</h3>
           {billError ? <p className="error">{billError}</p> : null}
@@ -1689,7 +1727,7 @@ export function App() {
       return;
     }
     const st = documentViewer?.processing_status;
-    const terminal = st === "extracted" || st === "failed";
+    const terminal = st === "extracted" || st === "failed" || st === "unsupported";
     if (terminal && !viewerLoading && !billLoading) {
       setPipelineHold(false);
     }
@@ -2611,8 +2649,15 @@ export function App() {
                             "—"
                           )}
                         </td>
-                        <td className="cell-error" title={row.processing_error ?? undefined}>
-                          {row.processing_error ? row.processing_error : "—"}
+                        <td
+                          className={row.processing_status === "unsupported" ? "cell-unsupported" : "cell-error"}
+                          title={row.unsupported_reason ?? row.processing_error ?? undefined}
+                        >
+                          {row.processing_status === "unsupported" && row.unsupported_reason
+                            ? row.unsupported_reason
+                            : row.processing_error
+                              ? row.processing_error
+                              : "—"}
                         </td>
                         <td>{row.source}</td>
                         <td className="cell-mono">{row.mime_type}</td>

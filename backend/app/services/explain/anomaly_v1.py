@@ -58,6 +58,20 @@ def build_explainability_v1(
         return _missing_period(summary=summary)
     if rule_id == "credits_exceed_charges":
         return _credits_exceed(ev)
+    if rule_id == "tax_high_share_of_total":
+        return _tax_high_share(ev)
+    if rule_id == "extraction_structured_fallback":
+        return _extraction_fallback(ev, summary=summary)
+    if rule_id == "extraction_no_llm_key":
+        return _extraction_info(summary=summary)
+    if rule_id in (
+        "extraction_low_text_quality",
+        "extraction_no_line_items",
+        "extraction_few_line_items",
+    ):
+        return _extraction_quality_rule(rule_id, ev, summary=summary)
+    if rule_id.startswith("utility_") or rule_id == "telecom_many_fees":
+        return _domain_pack(rule_id, ev, summary=summary)
     return ExplainabilityV1(
         explanation=(
             f"This signal uses rule “{rule_id}”. The pipeline stored a short summary; "
@@ -274,6 +288,77 @@ def _missing_period(*, summary: str) -> ExplainabilityV1:
         confidence="high",
         reasons=("Data-quality signal from extraction metadata.",),
     )
+
+
+def _tax_high_share(ev: Mapping[str, Any]) -> ExplainabilityV1:
+    tax_sum = _get_str(ev, "tax_sum")
+    total = _get_str(ev, "bill_total")
+    pct = ev.get("tax_percent")
+    cur = _get_str(ev, "currency")
+    tier, reasons = _tier_for_keys(("tax_sum", "bill_total", "tax_percent"), ev)
+    pct_note = ""
+    if pct is not None and _non_empty_scalar(pct):
+        pct_note = f" ({format_percent_from_float(float(pct))}% of the bill)"
+    explanation = (
+        f"Tax lines on this bill add up to {tax_sum} {cur} against a total of {total} {cur}{pct_note}. "
+        "High tax share is worth verifying even without prior bills."
+    )
+    return ExplainabilityV1(explanation=explanation, confidence=tier, reasons=reasons)
+
+
+def _extraction_fallback(ev: Mapping[str, Any], *, summary: str) -> ExplainabilityV1:
+    via = _get_str(ev, "structured_via", default="")
+    err = ev.get("structured_error")
+    tier: ConfidenceLevel = "high" if via else "medium"
+    reasons: tuple[str, ...] = ("Provenance fields stored at compare time.",)
+    err_note = f" Error: {err}." if err else ""
+    explanation = (
+        "Structured line items may not reflect this PDF because LLM extraction failed and the "
+        f"pipeline stored a fallback sample ({via or 'unknown'}).{err_note} {summary}"
+    )
+    return ExplainabilityV1(explanation=explanation.strip(), confidence=tier, reasons=reasons)
+
+
+def _extraction_info(*, summary: str) -> ExplainabilityV1:
+    return ExplainabilityV1(
+        explanation=summary.strip(),
+        confidence="high",
+        reasons=("Operational extraction note from bill provenance.",),
+    )
+
+
+def _extraction_quality_rule(
+    rule_id: str,
+    ev: Mapping[str, Any],
+    *,
+    summary: str,
+) -> ExplainabilityV1:
+    tier, reasons = _tier_for_keys(("text_extraction_method",), ev) if rule_id == "extraction_low_text_quality" else (
+        "high",
+        ("Data-quality signal from extraction metadata.",),
+    )
+    if rule_id == "extraction_no_line_items":
+        tier = "high"
+        reasons = ("No normalized lines blocks most comparison math.",)
+    explanation = summary
+    if rule_id == "extraction_low_text_quality":
+        ocr = ev.get("text_needs_ocr")
+        chars = ev.get("text_char_count")
+        explanation = (
+            f"PDF text was sparse or OCR was needed (needs_ocr={ocr}, char_count={chars}). "
+            f"{summary}"
+        )
+    return ExplainabilityV1(explanation=explanation.strip(), confidence=tier, reasons=reasons)
+
+
+def _domain_pack(rule_id: str, ev: Mapping[str, Any], *, summary: str) -> ExplainabilityV1:
+    pack = _get_str(ev, "pack", default=rule_id)
+    tier, reasons = _tier_for_keys(("pack",), ev)
+    explanation = (
+        f"Domain pack “{pack}” fired on this bill. {summary} "
+        "Extend utility-specific rules as pilots surface new bill shapes."
+    )
+    return ExplainabilityV1(explanation=explanation.strip(), confidence=tier, reasons=reasons)
 
 
 def _credits_exceed(ev: Mapping[str, Any]) -> ExplainabilityV1:

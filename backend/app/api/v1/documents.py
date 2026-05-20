@@ -96,6 +96,8 @@ def _document_list_items(
             source=doc.source,
             processing_status=doc.processing_status,
             processing_error=doc.processing_error,
+            unsupported_reason_code=doc.unsupported_reason_code,
+            unsupported_reason=doc.unsupported_reason,
             anomaly_review_status=review_by_doc.get(doc.id),
             created_at=doc.created_at,
         )
@@ -128,6 +130,8 @@ def _document_detail_response(db: Session, doc: Document) -> DocumentDetailRespo
         source=doc.source,
         processing_status=doc.processing_status,
         processing_error=doc.processing_error,
+        unsupported_reason_code=doc.unsupported_reason_code,
+        unsupported_reason=doc.unsupported_reason,
         created_at=doc.created_at,
         latest_raw_extraction=latest_snap,
     )

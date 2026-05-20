@@ -3,7 +3,7 @@
  *
  * Lets a platform admin configure batches of synthetic utility bills,
  * generate them as valid PDFs in the browser (no server call), preview
- * each one side-by-side, and download individually or all at once.
+ * each one side-by-side, download individually, or download the batch as one ZIP.
  *
  * Generated PDFs have an embedded text layer so pypdf can extract them
  * without OCR — they are valid input for the full ingestion pipeline.
@@ -18,6 +18,7 @@ import {
   SCENARIO_SEVERITY,
   generateBillPdf,
   getFilename,
+  zipGeneratedPdfs,
   type BillConfig,
   type ScenarioKey,
   type UtilityType,
@@ -48,6 +49,7 @@ export function PdfGeneratorPage() {
   const [generated,   setGenerated]   = useState<GeneratedItem[]>([]);
   const [previewUrl,  setPreviewUrl]  = useState<string | null>(null);
   const [previewIdx,  setPreviewIdx]  = useState<number>(0);
+  const [zipping,     setZipping]     = useState(false);
   const generatedRef = useRef<GeneratedItem[]>([]);
 
   // Revoke all blob URLs on unmount
@@ -104,15 +106,25 @@ export function PdfGeneratorPage() {
     setPreviewUrl(generated[idx]?.blobUrl ?? null);
   }
 
-  function downloadAll() {
-    generated.forEach(({ blobUrl, filename }) => {
+  /** One ZIP avoids Chrome/Safari blocking more than ~10 rapid automatic downloads. */
+  async function downloadAll() {
+    if (generated.length === 0 || zipping) return;
+    setZipping(true);
+    try {
+      const zipBlob = await zipGeneratedPdfs(
+        generated.map(({ blob, filename }) => ({ blob, filename })),
+      );
+      const url = URL.createObjectURL(zipBlob);
       const a = document.createElement("a");
-      a.href     = blobUrl;
-      a.download = filename;
+      a.href = url;
+      a.download = `utility-test-bills-${generated.length}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-    });
+      URL.revokeObjectURL(url);
+    } finally {
+      setZipping(false);
+    }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -179,7 +191,7 @@ export function PdfGeneratorPage() {
           <div className="field">
             <span className="field-label">Utility type</span>
             <div className="radio-group">
-              {(["electricity", "gas", "water"] as UtilityType[]).map(u => (
+              {(["electricity", "gas", "water", "telecom"] as UtilityType[]).map(u => (
                 <label
                   key={u}
                   className={`radio-option${utility === u ? " radio-option--checked" : ""}`}
@@ -306,10 +318,15 @@ export function PdfGeneratorPage() {
             <h2>Generated — {generated.length} PDF{generated.length > 1 ? "s" : ""}</h2>
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <span className="hint" style={{ margin: 0 }}>
-                Click a card to preview · download individually or all at once
+                Click a card to preview · per-PDF links below, or one ZIP for the full batch
               </span>
-              <button type="button" className="secondary" onClick={downloadAll}>
-                Download all
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => void downloadAll()}
+                disabled={zipping}
+              >
+                {zipping ? "Building ZIP…" : `Download all (${generated.length}) as ZIP`}
               </button>
             </div>
           </div>
@@ -388,7 +405,9 @@ export function PdfGeneratorPage() {
             <strong>Next step:</strong> go to{" "}
             <strong>Upload</strong>, select an org and site, then upload these PDFs in the order
             shown above. Bills at the same site need to be in chronological order so the pipeline
-            can match prior-month history for MoM and new-fee comparisons.
+            can match prior-month history for MoM and new-fee comparisons. Use{" "}
+            <strong>EXTRACTION_LLM_API_KEY</strong> for telecom/domain packs and real line extraction;
+            without it, stub lines still trigger extraction-quality signals on text-rich PDFs.
           </div>
         </section>
       )}

@@ -25,13 +25,23 @@ export interface CompleteUploadResponse {
   byte_size: number;
   processing_status: string;
   processing_error?: string | null;
+  unsupported_reason_code?: string | null;
+  unsupported_reason?: string | null;
 }
+
+/** Same-file reprocess can help only when extraction settings changed (not wrong file content). */
+export const UNSUPPORTED_REPROCESS_MAY_HELP_CODES = new Set([
+  "stub_ignored_text",
+  "llm_structuring_failed",
+]);
 
 /** Response from ``POST …/reprocess`` (row reset to ``queued`` for the worker). */
 export interface ReprocessDocumentResponse {
   document_id: string;
   processing_status: string;
   processing_error?: string | null;
+  unsupported_reason_code?: string | null;
+  unsupported_reason?: string | null;
 }
 
 export interface DocumentDetailResponse {
@@ -48,6 +58,8 @@ export interface DocumentDetailResponse {
   source: string;
   processing_status: string;
   processing_error?: string | null;
+  unsupported_reason_code?: string | null;
+  unsupported_reason?: string | null;
   created_at: string;
   latest_raw_extraction?: RawExtractionSnapshotResponse | null;
 }
@@ -77,6 +89,8 @@ export interface DocumentListItemResponse {
   source: string;
   processing_status: string;
   processing_error?: string | null;
+  unsupported_reason_code?: string | null;
+  unsupported_reason?: string | null;
   /** Rollup from ``anomalies.review_status`` (null when no comparison signals). */
   anomaly_review_status?: "open" | "approved" | "dismissed" | "flagged" | null;
   created_at: string;

@@ -5,9 +5,10 @@
 ``sha256`` and ``byte_size`` may be null while a presigned upload is in flight;
 a partial unique index enforces dedupe only once ``sha256`` is known (per org).
 
-``processing_error`` is set when the worker marks ``failed``; cleared when a new
-``queued`` job is processed successfully. ``raw_extractions`` holds pillar **2a**
-JSONB blobs (append-only).
+``processing_error`` is set when the worker marks ``failed`` (pipeline/technical);
+cleared on successful retry. ``unsupported_reason`` is set when status is
+``unsupported`` (file processed but not treated as a utility bill). ``raw_extractions``
+holds pillar **2a** JSONB blobs (append-only).
 """
 
 from __future__ import annotations
@@ -80,10 +81,13 @@ class Document(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="upload")
     # Optional user label (upload-time or PATCH); NULL when unset or cleared.
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    # awaiting_object → queued → received → extracted | failed (worker-driven).
+    # awaiting_object → queued → received → extracted | unsupported | failed (worker-driven).
     processing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     # Worker/API failure summary for ingestion list UI (cleared on successful retry).
     processing_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Set when ``processing_status`` is ``unsupported`` (not a utility bill — not a pipeline error).
+    unsupported_reason_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    unsupported_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Soft delete: set by DELETE API; excluded from list/viewer queries until hard delete exists.
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),

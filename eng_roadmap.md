@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-19 (org membership, invites, per-org roles; migration **016**)  
+**Last updated:** 2026-05-20 (§3c product spec; **`unsupported`** document validity — migration **017**)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -22,13 +22,13 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
 | **1b** | Documents API + **`GET/POST /api/v1/organizations`** (dev admin). Tenant = **`X-Organization-Id`** on document routes. |
 | **1c** | **`frontend/`** **LoginPage** + org picker (platform admin); Upload (optional **display_name**, **site** via Connection); **Documents** / **Anomalies** / **Organizations**; viewer (**display name**, **site** assign); **reprocess**; pipeline **polling**; anomalies **grouped by document**, **AnomalyDocumentFilter** + **`GET /documents/browse`**; Documents ↔ Anomalies **Signals** links; §5 review + **Refresh** (**materialize-comparisons**). |
-| **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess; after bill upsert **§3e** enqueues comparison backfill on the same ``documents`` queue. |
+| **1d** | **Redis + RQ** + **`document-worker`** (``SimpleWorker`` on macOS): enqueue after upload / reprocess; validity gate → ``extracted`` or ``unsupported`` (no bill on unsupported); after bill upsert **§3e** enqueues comparison backfill. |
 | **1h** | List + detail + **`processing_error`**; latest raw extraction on detail. |
 | **2a** | Worker: S3 bytes → **`pypdf` embedded text** → optional **Tesseract OCR** for scan-only PDFs / images → optional LLM → **`generic-bill-v1`** JSONB. |
 | **2b** | Strict Pydantic for **`stub-v1`** and **`generic-bill-v1`** (**``extra=forbid``**). |
 | **2c–2d** | Normalization + transactional **`bills` / `bill_line_items`** upsert; **`GET …/bill`**. |
 | **3a** | Prior-bill queries: `app/services/comparison/period.py`, `app/repositories/bills.py` (`list_bills_for_site`, `get_prior_bills_for_bill`), **`GET …/bill/prior-bills`**. |
-| **3b** | Rule pack **v1.1** (`comparison-v1.1`): `rule_pack_v1.py` + `single_bill_integrity.py` (MoM, new fees, header mismatch, duplicate lines, fee share, penalty fees, period/credit signals); **`GET …/bill/comparison`**; UI **Comparison insights**. |
+| **3b** | Rule pack **v1.2** (`comparison-v1.2`): `rule_pack_v1.py`, `single_bill_integrity.py`, `extraction_quality.py`, `domain_packs.py` (MoM, new fees, header mismatch, duplicate lines, fee/tax share, penalty fees, period/credit, extraction provenance, utility/telecom packs); labeled harness ``tests/comparison_labeled_cases.py``; **`GET …/bill/comparison`**; UI **Comparison insights**. |
 | **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`** (+ **`GET …/anomalies/{id}`** §4d); replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab. New anomalies default **`review_status=open`** (**009**). |
 | **3e** | **Shipped:** RQ backfill after worker upsert runs **bounded site-wide** comparison when the bill has a ``site_id``; **PATCH …/site** + **DELETE** queue site refresh (old site on move/delete); **010** index ``ix_bills_org_site_period_sort``; ``list_document_ids_newest_through_anchor`` adds immediate-older neighbor for targeted repair; keyset pages + ``SITE_BILL_REFRESH_MAX_BILLS``. |
 | **P1** | **Shipped:** auth + **Account**; migration **015**; **016** ``organization_members`` + ``organization_invites``; per-org ``org_admin``/``member``/``viewer``; team API + UI; ``POST /auth/accept-invite``; ``require_org_writer`` / ``require_org_manager``. |
@@ -65,11 +65,11 @@ These are **not** in the current sprint; **§3c** stays out of repo until produc
 
 | ID | Item |
 |----|------|
-| **§3c** | Site-to-site comparables (only where categories/units align; explicit “not comparable” outcomes). |
+| **§3c** | Site-to-site comparables — **not started**. Product spec: [`product_roadmap.md`](product_roadmap.md) § “Cross-site comparison (§3c)”. Peer-benchmark rules only; **not** all-bills × all-sites on upload. |
 
 ### Suggested “resume here” order
 
-1. **Real-bill pilot** — LLM extraction + more **single-bill** / domain rules on production PDFs.  
+1. **Real-bill pilot** — LLM extraction on production PDFs; expand labeled golden cases from pilot labels.  
 2. **§3c** — site-to-site comparables when a pilot needs cross-location views.  
 3. **P2 + P4–P5** — retries/idempotency, observability, E2E smoke.
 
@@ -132,7 +132,7 @@ Each **product milestone** below is split into **independent engineering steps**
 |------|------------|-----------------|
 | **3a — “Prior bill for site + period” queries** | Repository functions / SQL; define “period” and ordering rules. | No anomaly rows yet; used by tests and **3b**. |
 | **3b — Rule pack v1 (code-first)** | MoM deltas, new fee lines, simple thresholds; deterministic outputs + evidence structs. | Table-driven rules file is fine; no LLM. |
-| **3c — Site-to-site comparables** | Only where categories/units align; explicit “not comparable” outcomes. | Can ship after **3b** if you gate on schema flags. |
+| **3c — Site-to-site comparables** | Peer pack `comparison-peer-v1` per [`product_roadmap.md`](product_roadmap.md): gated peer set (org + domain + service + period + min peers), three rules (`peer_fee_line_rare`, `peer_fee_line_widespread`, `peer_usage_or_total_outlier`), explicit `not_comparable_*`. Optional materialize/schedule — **not** default worker path. | Ship after **3b** + pilot ask; separate rule pack version from `comparison-v1.2`. |
 | **3d — `anomalies` persistence** | **Shipped:** `anomalies` + partial unique indexes; ``GET /api/v1/anomalies``; upsert on ``GET …/bill/comparison`` (delete+insert per ``bill_id`` + ``rule_pack_version``); fee rules expand to per-line rows with ``bill_line_item_id``. | Explainability (**4**) reads these rows + stored metrics. |
 | **3e — Re-run / backfill job** | **Shipped:** RQ backfill after worker upsert = bounded site-wide refresh per bill site; site PATCH + soft-delete refresh neighbors (old site on move); mid-timeline prior shifts covered automatically. | Without Redis, user must still call ``GET …/bill/comparison`` or **Anomalies Refresh** to populate ``anomalies``. |
 

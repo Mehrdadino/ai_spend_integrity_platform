@@ -128,7 +128,7 @@ def persist_raw_extraction_for_document(
         extraction_version=GENERIC_BILL_EXTRACTION_VERSION,
     )
     session.add(row)
-    document.processing_status = "extracted"
+    # Final status (``extracted`` vs ``unsupported`` vs ``failed``) is set by ``document_jobs``.
     session.flush()
     logger.info(
         "raw_extraction: stored id=%s document=%s version=%s model_id=%s chars=%s via=%s",

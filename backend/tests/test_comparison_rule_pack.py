@@ -7,7 +7,14 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from app.constants.normalization import LINE_KIND_CHARGE, LINE_KIND_CREDIT, LINE_KIND_FEE
+from app.constants.normalization import (
+    LINE_KIND_CHARGE,
+    LINE_KIND_CREDIT,
+    LINE_KIND_FEE,
+    LINE_KIND_TAX,
+    SPEND_DOMAIN_TELECOM,
+)
+from app.services.normalization.service_keys import SERVICE_UTILITY_ELECTRIC
 from app.models.bill import Bill
 from app.models.bill_line_item import BillLineItem
 from app.services.comparison.rule_pack_v1 import evaluate_rule_pack_v1
@@ -18,8 +25,11 @@ def _bill(
     bill_id: uuid.UUID | None = None,
     site_id: uuid.UUID | None = None,
     total: str | None = None,
+    spend_domain: str = "utility",
+    spend_kind: str | None = "electricity",
     period_end: date | None = date(2026, 3, 31),
     period_start: date | None = None,
+    summary: dict | None = None,
     line_items: list[BillLineItem] | None = None,
 ) -> Bill:
     bid = bill_id or uuid.uuid4()
@@ -28,8 +38,10 @@ def _bill(
         organization_id=uuid.uuid4(),
         site_id=site_id or uuid.uuid4(),
         document_id=uuid.uuid4(),
-        spend_domain="utility",
+        spend_domain=spend_domain,
+        spend_kind=spend_kind,
         currency="USD",
+        summary=summary,
         normalization_version="norm-v1",
         period_start=period_start,
         period_end=period_end,
@@ -182,6 +194,57 @@ class TestRulePackV1(unittest.TestCase):
         findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
         missing = next(f for f in findings if f.rule_id == "missing_period_dates")
         self.assertEqual(missing.severity, "info")
+
+    def test_tax_high_share(self) -> None:
+        current = _bill(
+            total="100.00",
+            line_items=[
+                _line(kind=LINE_KIND_CHARGE, label="Usage", amount="70.00", position=1),
+                _line(kind=LINE_KIND_TAX, label="Sales tax", amount="12.00", position=2),
+            ],
+        )
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
+        tax = next(f for f in findings if f.rule_id == "tax_high_share_of_total")
+        self.assertEqual(tax.severity, "warning")
+
+    def test_extraction_structured_fallback(self) -> None:
+        current = _bill(
+            summary={"structured_via": "deterministic_fallback", "line_count": 1},
+            line_items=[_line(kind=LINE_KIND_CHARGE, label="A", amount="10.00")],
+        )
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
+        self.assertIn("extraction_structured_fallback", {f.rule_id for f in findings})
+
+    def test_utility_electric_demand_without_kwh(self) -> None:
+        current = _bill(
+            spend_kind="electricity",
+            line_items=[
+                _line(
+                    kind=LINE_KIND_CHARGE,
+                    label="Demand charge 45 kW",
+                    amount="80.00",
+                    position=1,
+                ),
+            ],
+        )
+        current.line_items[0].canonical_service_key = SERVICE_UTILITY_ELECTRIC
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
+        self.assertIn("utility_electric_demand_without_usage", {f.rule_id for f in findings})
+
+    def test_telecom_many_fees(self) -> None:
+        current = _bill(
+            total="100.00",
+            spend_domain=SPEND_DOMAIN_TELECOM,
+            spend_kind="broadband",
+            line_items=[
+                _line(kind=LINE_KIND_CHARGE, label="Internet", amount="55.00", position=1),
+                _line(kind=LINE_KIND_FEE, label="Fee A", amount="15.00", position=2),
+                _line(kind=LINE_KIND_FEE, label="Fee B", amount="15.00", position=3),
+                _line(kind=LINE_KIND_FEE, label="Fee C", amount="10.00", position=4),
+            ],
+        )
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
+        self.assertIn("telecom_many_fees", {f.rule_id for f in findings})
 
     def test_credits_exceed_charges(self) -> None:
         current = _bill(
