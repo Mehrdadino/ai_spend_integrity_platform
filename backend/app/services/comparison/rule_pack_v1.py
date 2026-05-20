@@ -15,7 +15,7 @@ from app.models.bill import Bill
 from app.models.bill_line_item import BillLineItem
 from app.schemas.comparison import ComparisonFindingResponse, ComparisonSeverity
 from app.services.comparison.line_match import fee_line_fingerprints, line_fingerprint
-from app.services.comparison.period import effective_period_end
+from app.services.comparison.period import effective_period_end, has_confirmed_billing_period
 from app.services.comparison.rules_config import (
     HEADER_LINES_TOLERANCE,
     MOM_ABSOLUTE_WARNING,
@@ -130,6 +130,40 @@ def _check_header_total_mismatch(current: Bill) -> ComparisonFindingResponse | N
     )
 
 
+def _period_comparison_allowed(current: Bill, prior: Bill) -> bool:
+    """MoM and new-fee rules require confirmed periods on both bills (no upload-date proxy)."""
+    return has_confirmed_billing_period(current) and has_confirmed_billing_period(prior)
+
+
+def _check_period_comparison_skipped(
+    current: Bill, prior: Bill
+) -> ComparisonFindingResponse:
+    """Explain why MoM / new-fee did not run when period dates are missing on either bill."""
+    current_ok = has_confirmed_billing_period(current)
+    prior_ok = has_confirmed_billing_period(prior)
+    if not current_ok and not prior_ok:
+        detail = "Neither this bill nor the prior bill at this site has a confirmed billing period."
+    elif not current_ok:
+        detail = "This bill has no confirmed billing period."
+    else:
+        detail = "The prior bill at this site has no confirmed billing period."
+    return _finding(
+        rule_id="period_comparison_skipped",
+        severity="info",
+        title="Month-over-month comparison not run",
+        summary=(
+            f"{detail} We did not compare totals or fee lines to the prior bill because "
+            "upload order is not a reliable substitute for invoice period dates. "
+            "Single-bill integrity checks still ran."
+        ),
+        evidence={
+            "prior_bill_id": str(prior.id),
+            "current_has_period": current_ok,
+            "prior_has_period": prior_ok,
+        },
+    )
+
+
 def _check_new_fee_lines(current: Bill, prior: Bill) -> ComparisonFindingResponse | None:
     prior_fps = fee_line_fingerprints(list(prior.line_items))
     new_fees: list[dict[str, Any]] = []
@@ -174,7 +208,8 @@ def evaluate_rule_pack_v1(
     """Run all v1 rules; return findings and the prior bill id used for MoM (if any).
 
     ``header_total_mismatch`` runs on every bill (no prior required). MoM and new-fee rules
-    need the immediate prior bill at the same ``site_id``.
+    need the immediate prior bill at the same ``site_id`` **and** confirmed billing periods
+    on both bills (see ``has_confirmed_billing_period``).
     """
     findings: list[ComparisonFindingResponse] = []
 
@@ -212,6 +247,11 @@ def evaluate_rule_pack_v1(
         return findings, None
 
     prior = priors[0]
+
+    if not _period_comparison_allowed(current, prior):
+        findings.append(_check_period_comparison_skipped(current, prior))
+        return findings, None
+
     compared_id: UUID = prior.id
 
     mom_find = _check_mom_total(current, prior)

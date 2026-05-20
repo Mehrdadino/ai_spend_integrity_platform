@@ -166,11 +166,12 @@ def _check_missing_period_dates(current: Bill) -> ComparisonFindingResponse | No
         return None
     return _finding(
         rule_id="missing_period_dates",
-        severity="info",
+        severity="warning",
         title="Billing period not detected",
         summary=(
             "No service period start or end was extracted from this bill. "
-            "Comparisons and period ordering work better when dates are present."
+            "Month-over-month and new-fee checks are not run until a billing period is confirmed "
+            "on this bill and the prior bill at the same site."
         ),
         evidence={},
     )

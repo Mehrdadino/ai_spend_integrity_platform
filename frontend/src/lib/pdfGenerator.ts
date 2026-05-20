@@ -5,7 +5,7 @@ import { zipSync } from "fflate";
  *
  * Produces PDFs with an embedded text layer so pypdf (and the LLM extractor)
  * can read them without OCR — making them valid input for the full ingestion
- * + comparison pipeline. Scenarios align with comparison rule pack **v1.2**
+ * + comparison pipeline. Scenarios align with comparison rule pack **v1.3**
  * (tax share, domain packs, extraction quality, duplicate lines, etc.).
  *
  * PDF bytes use only browser APIs; batch ZIP uses ``fflate``.
@@ -68,7 +68,7 @@ export const SCENARIO_LABELS: Record<ScenarioKey, string> = {
   multi_rule:              "Multi-rule v1.2 (5+ signals)",
 };
 
-/** Which comparison rule IDs each scenario is designed to trigger (comparison-v1.2). */
+/** Which comparison rule IDs each scenario is designed to trigger (comparison-v1.3). */
 export const SCENARIO_RULES: Record<ScenarioKey, string[]> = {
   normal:                  [],
   mom_spike:               ["mom_total_change"],
@@ -79,7 +79,7 @@ export const SCENARIO_RULES: Record<ScenarioKey, string[]> = {
   tax_high_share:          ["tax_high_share_of_total"],
   duplicate_lines:         ["duplicate_line_fingerprint"],
   credits_exceed:          ["credits_exceed_charges"],
-  missing_dates:           ["missing_period_dates"],
+  missing_dates:           ["missing_period_dates", "period_comparison_skipped"],
   electric_demand_no_kwh:  ["utility_electric_demand_without_usage"],
   water_no_usage:          ["utility_water_missing_usage"],
   gas_no_usage:            ["utility_gas_missing_usage"],
@@ -108,7 +108,7 @@ export const SCENARIO_SEVERITY: Record<ScenarioKey, "none" | "info" | "warning" 
   tax_high_share:          "warning",
   duplicate_lines:         "warning",
   credits_exceed:          "warning",
-  missing_dates:           "info",
+  missing_dates:           "warning",
   electric_demand_no_kwh:  "warning",
   water_no_usage:          "warning",
   gas_no_usage:            "warning",
@@ -146,7 +146,7 @@ export const PRESETS: PresetDef[] = [
     label: "MoM Spike Pair",
     description:
       "Normal electricity bill (3 mo ago) + spike bill (last month) for the same site. " +
-      "Upload both in order to trigger the MoM critical signal.",
+      "Upload both to the same site (any order); MoM uses billing period dates on each PDF.",
     count: 2,
     bills: [
       { siteName: "Site A", monthOffset: -3, utility: "electricity", scenario: "normal"    },
@@ -208,7 +208,7 @@ export const PRESETS: PresetDef[] = [
     label: "Full Test Suite (12 bills)",
     description:
       "MoM history, new fees, domain packs, integrity singles, and legacy scenarios — " +
-      "covers comparison-v1.2 rules end-to-end (LLM key recommended for telecom + line extraction).",
+      "covers comparison-v1.3 rules end-to-end (LLM key recommended for telecom + line extraction).",
     count: 12,
     bills: [
       { siteName: "Main Street", monthOffset: -4, utility: "electricity", scenario: "normal"                  },

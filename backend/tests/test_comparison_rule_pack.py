@@ -189,11 +189,49 @@ class TestRulePackV1(unittest.TestCase):
         penalty = next(f for f in findings if f.rule_id == "penalty_style_fees")
         self.assertEqual(penalty.evidence["count"], 1)
 
-    def test_missing_period_dates_info(self) -> None:
+    def test_missing_period_dates_warning(self) -> None:
         current = _bill(period_start=None, period_end=None)
         findings, _ = evaluate_rule_pack_v1(current=current, priors=[])
         missing = next(f for f in findings if f.rule_id == "missing_period_dates")
-        self.assertEqual(missing.severity, "info")
+        self.assertEqual(missing.severity, "warning")
+
+    def test_mom_skipped_when_current_has_no_period(self) -> None:
+        current = _bill(total="140.00", period_start=None, period_end=None)
+        prior = _bill(total="100.00", period_end=date(2026, 2, 28))
+        findings, compared = evaluate_rule_pack_v1(current=current, priors=[prior])
+        self.assertIsNone(compared)
+        rules = {f.rule_id for f in findings}
+        self.assertIn("period_comparison_skipped", rules)
+        self.assertIn("missing_period_dates", rules)
+        self.assertNotIn("mom_total_change", rules)
+
+    def test_mom_skipped_when_prior_has_no_period(self) -> None:
+        current = _bill(total="140.00", period_end=date(2026, 3, 31))
+        prior = _bill(total="100.00", period_start=None, period_end=None)
+        findings, compared = evaluate_rule_pack_v1(current=current, priors=[prior])
+        self.assertIsNone(compared)
+        self.assertIn("period_comparison_skipped", {f.rule_id for f in findings})
+        self.assertNotIn("mom_total_change", {f.rule_id for f in findings})
+
+    def test_new_fee_skipped_when_period_missing(self) -> None:
+        prior = _bill(
+            total="100.00",
+            period_start=None,
+            period_end=None,
+            line_items=[_line(kind=LINE_KIND_CHARGE, label="Energy charge", amount="100.00")],
+        )
+        current = _bill(
+            total="110.00",
+            period_end=date(2026, 3, 31),
+            line_items=[
+                _line(kind=LINE_KIND_CHARGE, label="Energy charge", amount="100.00", position=1),
+                _line(kind=LINE_KIND_FEE, label="Late payment fee", amount="10.00", position=2),
+            ],
+        )
+        findings, _ = evaluate_rule_pack_v1(current=current, priors=[prior])
+        rules = {f.rule_id for f in findings}
+        self.assertIn("period_comparison_skipped", rules)
+        self.assertNotIn("new_fee_lines", rules)
 
     def test_tax_high_share(self) -> None:
         current = _bill(

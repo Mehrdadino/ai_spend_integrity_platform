@@ -252,8 +252,8 @@ export function PdfGeneratorPage() {
             </div>
           </div>
           <p className="doc-list-lede">
-            Bills will be generated in order. Upload them in the same order to the same site
-            so the pipeline can compare prior months correctly.
+            Table order is for readability only. Assign each PDF to the matching site; upload order
+            does not matter when billing period dates are extracted from the bill.
           </p>
           <div className="table-wrap">
             <table className="doc-table">
@@ -403,9 +403,9 @@ export function PdfGeneratorPage() {
           {/* Upload hint */}
           <div className="pdf-gen-upload-hint">
             <strong>Next step:</strong> go to{" "}
-            <strong>Upload</strong>, select an org and site, then upload these PDFs in the order
-            shown above. Bills at the same site need to be in chronological order so the pipeline
-            can match prior-month history for MoM and new-fee comparisons. Use{" "}
+            <strong>Upload</strong>, pick the site that matches each PDF label (Main Street, Warehouse,
+            etc.). MoM and new-fee use <strong>billing period dates on the bill</strong>, not upload
+            order — these test PDFs include period dates, so you may upload in any sequence. Use{" "}
             <strong>EXTRACTION_LLM_API_KEY</strong> for telecom/domain packs and real line extraction;
             without it, stub lines still trigger extraction-quality signals on text-rich PDFs.
           </div>

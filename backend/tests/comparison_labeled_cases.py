@@ -142,6 +142,18 @@ def build_labeled_cases() -> list[LabeledComparisonCase]:
             must_exclude=frozenset({"mom_total_change", "no_prior_bill"}),
         ),
         LabeledComparisonCase(
+            case_id="mom_skipped_no_confirmed_period",
+            current=_bill(
+                site_id=site,
+                total="140.00",
+                period_start=None,
+                period_end=None,
+            ),
+            priors=(prior,),
+            must_include=frozenset({"period_comparison_skipped", "missing_period_dates"}),
+            must_exclude=frozenset({"mom_total_change", "new_fee_lines"}),
+        ),
+        LabeledComparisonCase(
             case_id="tax_high_share",
             current=_bill(
                 total="100.00",

@@ -20,7 +20,7 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-20
+## Implementation status (repository) — 2026-05-19
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
@@ -36,7 +36,7 @@ Just:
 - **Platform admin** still sees all orgs; dev **`X-Organization-Id`** when `AUTH_ALLOW_DEV_ORG_HEADER=true`.
 - **Production hardening:** Redis **rate limits** (e.g. **3/15min** per email on forgot/register/invite, **5/15min** login, **10/min** per IP); **lockout** after **5** failed sign-ins; security headers; production startup validation.
 - **§3a prior bills:** `get_prior_bills_for_bill` + **`GET …/bill/prior-bills`** (same org, same `site_id`; period ordering); prior-bill table in document viewer.
-- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; rule pack **`comparison-v1.2`** — **single-bill integrity** on every bill (no prior): header vs lines, duplicate lines, high fee/tax share, penalty fees, missing period dates, credits vs charges, **extraction-quality** signals from ``bills.summary``, **utility/telecom domain packs** (electric demand without kWh, water/gas missing usage, telecom fee clusters); with history: MoM total, new fee lines; **labeled golden cases** in ``backend/tests/comparison_labeled_cases.py`` for rule recall regression; **`GET /api/v1/anomalies`** (+ detail) with **template explanations** and **grounding**; **`POST …/materialize-comparisons`** for inbox **Refresh**.
+- **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; rule pack **`comparison-v1.3`** — **single-bill integrity** on every bill (no prior): header vs lines, duplicate lines, high fee/tax share, penalty fees, **missing period dates** (warning), credits vs charges, **extraction-quality** signals from ``bills.summary``, **utility/telecom domain packs** (electric demand without kWh, water/gas missing usage, telecom fee clusters); with history: MoM total and new fee lines **only when both bills have confirmed billing periods** (otherwise **`period_comparison_skipped`** — upload order is not used as a month proxy); **labeled golden cases** in ``backend/tests/comparison_labeled_cases.py`` for rule recall regression; **`GET /api/v1/anomalies`** (+ detail) with **template explanations** and **grounding**; **`POST …/materialize-comparisons`** for inbox **Refresh**.
 - **§3e comparison backfill:** After worker upsert, **bounded site-wide** comparison when the bill has a `site_id` (correct priors after mid-timeline insert/delete). **Site change** refreshes the new site (via backfill) and the **previous** site when the bill moved. **Soft delete** triggers site-wide refresh. Keyset walk; cap `SITE_BILL_REFRESH_MAX_BILLS` (default 10,000).
 - **§5 review workflow:** `review_status` + **`anomaly_review_events`**; **`POST …/anomalies/{id}/review`**; inbox **Review status** filter; per-row **Actions** (approve / dismiss / flag / reopen) with **§5e notes** and **History**.
 - **Anomalies inbox UX:** signals **grouped by bill/document**; optional **display name** on list/API; **Filter by bill** — searchable, paginated **`GET /documents/browse`**; **View bill** on group; row click opens document (text can be highlighted without navigating). **Documents** tab **Signals** link and viewer **View in signals inbox** jump to filtered Anomalies.

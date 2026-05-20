@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-RULE_PACK_VERSION = "comparison-v1.2"
+RULE_PACK_VERSION = "comparison-v1.3"
 
 # Month-over-month total (current vs immediate prior bill).
 MOM_PERCENT_WARNING = Decimal("10")  # |delta %| >= 10 → warning

@@ -1,7 +1,9 @@
 """Bill period ordering for §3a prior-bill queries.
 
 **Period key (newest first):** ``coalesce(period_end, period_start, created_at.date())``,
-then ``created_at`` timestamp, then ``bill.id`` for stable ties.
+then ``created_at`` timestamp, then ``bill.id`` for stable ties. Upload-time fallback is
+used only to **order** the site history list; §3b MoM/new-fee rules require
+``has_confirmed_billing_period`` on both bills (rule pack v1.3).
 
 Bills with no ``site_id`` are not comparable across history until a site is assigned.
 """
@@ -19,6 +21,11 @@ BILL_ORDERING_NOTE = (
     "Prior bills: same organization and site_id, newest-first by "
     "coalesce(period_end, period_start, created_at date), then created_at, then id."
 )
+
+
+def has_confirmed_billing_period(bill: Bill) -> bool:
+    """True when extraction stored a service period (not upload-time fallback)."""
+    return bill.period_start is not None or bill.period_end is not None
 
 
 def effective_period_end(bill: Bill) -> date:

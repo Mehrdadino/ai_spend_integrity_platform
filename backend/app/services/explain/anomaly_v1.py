@@ -56,6 +56,8 @@ def build_explainability_v1(
         return _penalty_fees(ev)
     if rule_id == "missing_period_dates":
         return _missing_period(summary=summary)
+    if rule_id == "period_comparison_skipped":
+        return _period_comparison_skipped(ev, summary=summary)
     if rule_id == "credits_exceed_charges":
         return _credits_exceed(ev)
     if rule_id == "tax_high_share_of_total":
@@ -280,13 +282,39 @@ def _penalty_fees(ev: Mapping[str, Any]) -> ExplainabilityV1:
 
 def _missing_period(*, summary: str) -> ExplainabilityV1:
     explanation = (
-        "We could not read a service period from this bill. Period dates help order bills and "
-        f"pick the right prior month. {summary}"
+        "We could not read a service period from this bill. Without confirmed period dates, "
+        "month-over-month and new-fee checks are not run. "
+        f"{summary}"
     )
     return ExplainabilityV1(
         explanation=explanation.strip(),
         confidence="high",
         reasons=("Data-quality signal from extraction metadata.",),
+    )
+
+
+def _period_comparison_skipped(ev: Mapping[str, Any], *, summary: str) -> ExplainabilityV1:
+    cur_ok = ev.get("current_has_period") is True
+    prior_ok = ev.get("prior_has_period") is True
+    prior_id = _get_str(ev, "prior_bill_id", default="")
+    prior_note = f" A prior bill exists (id `{prior_id}`)." if prior_id and prior_id != "—" else ""
+    explanation = (
+        "This bill was not compared to the prior bill for month-over-month totals or new fee lines "
+        "because billing periods are not confirmed on both documents. "
+        "Upload order is not used as a substitute for invoice dates."
+        f"{prior_note} {summary}"
+    )
+    reasons: list[str] = []
+    if not cur_ok:
+        reasons.append("Current bill: no period_start or period_end in normalized data.")
+    if not prior_ok:
+        reasons.append("Prior bill: no period_start or period_end in normalized data.")
+    if cur_ok and prior_ok:
+        reasons.append("Period flags present in evidence; see summary for skip reason.")
+    return ExplainabilityV1(
+        explanation=explanation.strip(),
+        confidence="high",
+        reasons=tuple(reasons) if reasons else ("Period comparison gated by rule pack v1.3.",),
     )
 
 
