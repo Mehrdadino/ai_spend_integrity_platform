@@ -1787,10 +1787,97 @@ button.btn-danger:hover:not(:disabled) {
   color: #fbbf24;
 }
 
+.stuck-queued-hint {
+  font-size: 0.9rem;
+  color: #fbbf24;
+  line-height: 1.45;
+}
+
 .filemeta {
   margin: 0.75rem 0 0;
   font-size: 0.9rem;
   color: var(--muted);
+}
+
+.upload-file-list {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+}
+
+.upload-file-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.upload-file-list__meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.upload-warnings {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  color: #fbbf24;
+}
+
+.upload-batch-status {
+  margin: 0.85rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.upload-batch-status__item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 0.75rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.upload-batch-status__item--done .upload-batch-status__msg {
+  color: var(--success, #4ade80);
+}
+
+.upload-batch-status__item--error .upload-batch-status__msg {
+  color: #f87171;
+}
+
+.upload-batch-status__name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-batch-status__msg {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.upload-batch-results {
+  margin: 0.75rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.upload-batch-results li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.upload-batch-results__open {
+  margin-left: auto;
 }
 
 /* ── Login / auth pages ────────────────────────────────────────────────────── */

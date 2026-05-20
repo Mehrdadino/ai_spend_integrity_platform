@@ -304,7 +304,15 @@ def llm_generic_bill_dict(
 
 def format_llm_error_for_ui(exc: BaseException, *, max_len: int = 500) -> str:
     """Short, user-visible message for ``bills.summary.structured_error``."""
-    msg = str(exc).strip() or type(exc).__name__
+    exc_name = type(exc).__name__
+    if exc_name == "JobTimeoutException" or "maximum timeout value" in str(exc):
+        msg = (
+            "LLM structuring hit the worker time limit (RQ job timeout). "
+            "Increase RQ_DOCUMENT_JOB_TIMEOUT_SECONDS or EXTRACTION_LLM_TIMEOUT_SECONDS, "
+            "or retry when the API is faster."
+        )
+    else:
+        msg = str(exc).strip() or exc_name
     prefix = "LLM structuring failed: "
     budget = max(0, max_len - len(prefix))
     if len(msg) > budget:

@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # Redis for RQ (step 1d). Set empty to skip enqueue (document stays ``queued`` until you run worker).
     redis_url: str = "redis://127.0.0.1:6379/0"
 
+    # RQ per-job timeouts (seconds). RQ's implicit default is 180s — too low for LLM + OCR.
+    # Keep ``extraction_llm_timeout_seconds`` well below ``rq_document_job_timeout_seconds``.
+    rq_document_job_timeout_seconds: int = 600
+    rq_comparison_job_timeout_seconds: int = 900
+
     # Recorded on ``document_raw_extractions.model_id`` when no LLM is configured.
     raw_extraction_stub_model_id: str = "stub-llm"
 

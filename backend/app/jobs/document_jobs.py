@@ -36,7 +36,8 @@ from app.services.raw_extraction import persist_raw_extraction_for_document
 
 logger = logging.getLogger(__name__)
 
-_STATUSES_READY_FOR_WORKER = frozenset({"queued", "pending"})
+# ``received`` = worker started but may have crashed (RQ timeout / SIGABRT); allow resume.
+_STATUSES_READY_FOR_WORKER = frozenset({"queued", "pending", "received"})
 _MAX_ERROR_LEN = 8000
 
 
@@ -96,8 +97,9 @@ def process_document_pipeline(document_id: str) -> None:
             doc.processing_error = None
             doc.unsupported_reason = None
             doc.unsupported_reason_code = None
-            doc.processing_status = PROCESSING_RECEIVED
-            session.flush()
+            if doc.processing_status != PROCESSING_RECEIVED:
+                doc.processing_status = PROCESSING_RECEIVED
+                session.flush()
             raw_row, provenance = persist_raw_extraction_for_document(session, document=doc)
             bundle = build_normalized_bundle(document=doc, raw_row=raw_row)
             assessment = assess_document_validity(

@@ -9,11 +9,9 @@ from __future__ import annotations
 import logging
 import uuid
 
-from redis import Redis
-from rq import Queue
-
 from app.config import get_settings
 from app.jobs.document_jobs import process_document_pipeline
+from app.services.rq_enqueue import enqueue_documents_job
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +25,12 @@ def enqueue_document_pipeline(document_id: uuid.UUID) -> None:
             document_id,
         )
         return
-    conn = Redis.from_url(settings.redis_url)
-    queue = Queue("documents", connection=conn)
-    queue.enqueue(process_document_pipeline, str(document_id))
+    enqueue_documents_job(
+        process_document_pipeline,
+        str(document_id),
+        job_timeout_seconds=settings.rq_document_job_timeout_seconds,
+        description="document_pipeline",
+    )
     logger.info("document_pipeline_queue: enqueued document %s", document_id)
 
 

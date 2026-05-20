@@ -27,7 +27,7 @@ Just:
 ### Built so far (Phase 1 — ingestion through review)
 
 - **Stack in repo:** Python **FastAPI**, **PostgreSQL**, **MinIO**, **Redis + RQ**, **Vite + React + TypeScript** UI. Docker Compose runs Postgres, MinIO, and Redis locally.
-- **Document ingestion:** presigned upload + CLI; optional **display name** on upload; **SHA-256 dedupe** per org (re-upload allowed after soft delete); **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs.
+- **Document ingestion:** presigned upload (single or **bulk up to 10 PDFs** per batch on Upload tab) + CLI; optional **display name** on single-file upload; **SHA-256 dedupe** per org (re-upload allowed after soft delete); **Organizations** tab (list/create tenants); **Documents** tab with viewer, bill panel, **reprocess**, and **auto-refresh** while the worker runs.
 - **Sites & upload context:** **Connection** panel — active org, **site picker for uploads** (stored per org), create site; assign or change **site** on a document in the viewer (**`PATCH …/site`**). Comparison history is per **site** (location), not per utility type.
 - **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), falls back to **Tesseract OCR** for scan-only PDFs / image MIME types, optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**).
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.

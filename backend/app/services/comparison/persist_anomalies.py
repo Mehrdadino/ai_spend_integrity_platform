@@ -31,15 +31,21 @@ def replace_anomalies_for_comparison(
     """Upsert §3d rows for ``(bill_id, rule_pack_version)``; preserve §5 review on stable fingerprints.
 
     ``current`` must be the normalized bill instance (rule pack callers load ``line_items``).
+
+    Rows from **other** ``rule_pack_version`` values on the same bill are removed first: the
+    site-level unique index does not include rule pack version, so stale v1.2 rows would block
+    v1.3 inserts with the same fingerprint.
     """
-    existing = list(
-        session.scalars(
-            select(Anomaly).where(
-                Anomaly.bill_id == current.id,
-                Anomaly.rule_pack_version == rule_pack_version,
-            )
-        ).all()
+    all_for_bill = list(
+        session.scalars(select(Anomaly).where(Anomaly.bill_id == current.id)).all()
     )
+    stale_versions = [row for row in all_for_bill if row.rule_pack_version != rule_pack_version]
+    if stale_versions:
+        for row in stale_versions:
+            session.delete(row)
+        session.flush()
+
+    existing = [row for row in all_for_bill if row.rule_pack_version == rule_pack_version]
     existing_by_fp = {row.fingerprint: row for row in existing}
 
     incoming = _flatten_findings_into_rows(
@@ -51,6 +57,9 @@ def replace_anomalies_for_comparison(
     incoming_fps: set[str] = set()
 
     for template in incoming:
+        if template.fingerprint in incoming_fps:
+            # Defensive: duplicate templates in one §3b run must not double-insert.
+            continue
         incoming_fps.add(template.fingerprint)
         prior = existing_by_fp.get(template.fingerprint)
         if prior is not None:

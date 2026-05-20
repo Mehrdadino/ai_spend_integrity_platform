@@ -1,5 +1,11 @@
 import { tenantHeaders, tenantJsonHeaders } from "./api";
 
+/** Max PDFs per Upload-tab batch (client enforced; each file uses the presigned flow). */
+export const MAX_UPLOAD_BATCH_SIZE = 10;
+
+/** Per-file size cap; must match backend ``settings.max_upload_bytes`` (50 MiB). */
+export const MAX_UPLOAD_FILE_BYTES = 50 * 1024 * 1024;
+
 /**
  * Client for document APIs: presigned upload (1b–1c), list + detail (1h, 2a),
  * and presigned read URLs for in-browser preview (GET ``…/viewer`` / ``read-url``).

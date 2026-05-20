@@ -57,6 +57,8 @@ cd /path/to/ai_spend_integrity_platform
 - Waits for Postgres, runs **`seed-dev-org`** (dev org UUID) and **`seed-dev-user`** (default admin login for the UI).
 - **Ctrl+C** stops API, worker, and Vite; **Docker containers keep running** (`docker compose down` to stop them).
 - **`SKIP_DOCUMENT_WORKER=1 ./scripts/dev.sh`** — skip the RQ worker if Redis/worker is not needed.
+- **RQ job timeouts:** enqueue uses **`RQ_DOCUMENT_JOB_TIMEOUT_SECONDS`** (default **600** in code). RQ’s implicit default was **180s** (too low for OCR + LLM). Override in `backend/.env` if needed; do not set below ~300 unless PDFs are tiny. **`EXTRACTION_LLM_TIMEOUT_SECONDS`** (default **90**) is only the HTTP call to the LLM API.
+- **Parallel workers:** `DOCUMENT_WORKER_COUNT=3 ./scripts/dev.sh` starts three RQ processes on the same queue. On macOS, optional `RQ_USE_SIMPLE_WORKER=0` for fork-based workers (see `run_rq_worker.py`).
 
 When changing **Alembic/models**, from `backend/` with venv activated:
 

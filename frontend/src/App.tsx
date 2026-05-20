@@ -38,7 +38,7 @@ import {
 import { getSelectableTableRowProps } from "./lib/tableRowActivation";
 import { createSite, fetchSitesList, type SiteResponse } from "./lib/sites";
 import {
-  completeUpload,
+  MAX_UPLOAD_BATCH_SIZE,
   deleteDocument,
   fetchAnomaliesList,
   fetchAnomalyReviewEvents,
@@ -51,8 +51,6 @@ import {
   patchDocumentSite,
   postAnomalyReview,
   postMaterializeAnomalyComparisons,
-  presignUpload,
-  putFileToPresignedUrl,
   reprocessDocument,
   UNSUPPORTED_REPROCESS_MAY_HELP_CODES,
   type AnomalyReviewStatus,
@@ -65,14 +63,20 @@ import {
   type DocumentPriorBillsResponse,
   type DocumentViewerResponse,
 } from "./lib/upload";
-
-type Phase = "idle" | "presigning" | "uploading" | "completing" | "done" | "error";
+import {
+  batchSummary,
+  normalizeSelectedPdfFiles,
+  runUploadBatch,
+  type UploadBatchItem,
+} from "./lib/uploadBatch";
 type AppView = "upload" | "documents" | "anomalies" | "organizations" | "account" | "pdf-generator";
 
 const defaultApiBase = "http://127.0.0.1:8000";
 
-/** Interval (ms) for refetching viewer + bill while ``queued`` / ``pending`` / ``received``. */
-const PIPELINE_POLL_MS = 2500;
+/** Poll interval while the worker may still be running. */
+const PIPELINE_POLL_MS = 4000;
+/** Slower poll while status stays ``queued`` (waiting for RQ worker). */
+const PIPELINE_POLL_QUEUED_MS = 12000;
 const SITE_BY_ORG_STORAGE_KEY = "spend_site_by_org";
 
 function isUuid(value: string): boolean {
@@ -416,8 +420,17 @@ function storeSiteIdForOrg(orgId: string, siteId: string): void {
   }
 }
 
-/** Worker statuses where the viewer should show the pipeline overlay and poll. */
-const PIPELINE_BUSY_STATUSES = new Set(["queued", "pending", "received"]);
+/** Poll ``/viewer`` only while the document may still move through the worker. */
+const PIPELINE_POLL_STATUSES = new Set(["queued", "pending", "received"]);
+
+/** Full-screen blocking overlay (not used for mere ``queued`` wait). */
+const PIPELINE_OVERLAY_STATUSES = new Set(["received"]);
+
+/** Terminal statuses — stop polling and release reprocess overlay hold. */
+const TERMINAL_PROCESSING_STATUSES = new Set(["extracted", "failed", "unsupported"]);
+
+/** Viewer polls while still ``queued`` before we show the stuck-worker hint and stop polling. */
+const STUCK_QUEUED_POLL_THRESHOLD = 3;
 
 function PipelineBusyOverlay({ label }: { label: string }) {
   return (
@@ -709,8 +722,9 @@ function DocumentViewerPanel({
   reprocessError,
   deleteBusy,
   deleteError,
-  pipelineBusy,
-  pipelineBusyLabel,
+  pipelineOverlayBusy,
+  pipelineOverlayLabel,
+  stuckQueuedHint,
   sites,
   displayNameValue,
   onDisplayNameValueChange,
@@ -747,9 +761,11 @@ function DocumentViewerPanel({
   reprocessError?: string | null;
   deleteBusy?: boolean;
   deleteError?: string | null;
-  /** Show spinner overlay (reprocess / worker / background refresh) without clearing prior content. */
-  pipelineBusy?: boolean;
-  pipelineBusyLabel?: string;
+  /** Blocking spinner overlay (reprocess POST, active extraction, initial viewer load). */
+  pipelineOverlayBusy?: boolean;
+  pipelineOverlayLabel?: string;
+  /** True when ``queued`` persisted across several poll cycles (worker not consuming queue). */
+  stuckQueuedHint?: boolean;
   sites?: SiteResponse[];
   displayNameValue?: string;
   onDisplayNameValueChange?: (value: string) => void;
@@ -803,13 +819,14 @@ function DocumentViewerPanel({
   if (!showPanel) {
     return null;
   }
-  const statusPolling = viewer != null && PIPELINE_BUSY_STATUSES.has(viewer.processing_status);
+  const statusPolling =
+    viewer != null && PIPELINE_POLL_STATUSES.has(viewer.processing_status);
   return (
     <section className="card doc-viewer-card doc-viewer-card--pipeline" aria-live="polite">
-      {pipelineBusy ? (
-        <PipelineBusyOverlay label={pipelineBusyLabel ?? "Processing document…"} />
+      {pipelineOverlayBusy ? (
+        <PipelineBusyOverlay label={pipelineOverlayLabel ?? "Processing document…"} />
       ) : null}
-      <div className={`doc-viewer-body${pipelineBusy ? " doc-viewer-body--dimmed" : ""}`}>
+      <div className={`doc-viewer-body${pipelineOverlayBusy ? " doc-viewer-body--dimmed" : ""}`}>
       <div className="doc-viewer-toolbar">
         <h2 className="doc-viewer-title-wrap">
           {viewer?.display_name?.trim() ? (
@@ -960,6 +977,18 @@ function DocumentViewerPanel({
                 <span className="hint doc-status-poll-hint"> · auto-refresh until worker finishes</span>
               ) : null}
             </dd>
+            {viewer.processing_status === "queued" && stuckQueuedHint ? (
+              <>
+                <dt>Queue</dt>
+                <dd className="stuck-queued-hint">
+                  This file is still <strong>queued</strong>. On macOS dev, the worker runs{" "}
+                  <strong>one job at a time</strong> (often several minutes per PDF when LLM extraction is on) — bulk
+                  uploads wait in line. Ensure <code>document-worker</code> is running (e.g.{" "}
+                  <code>scripts/dev.sh</code>). If it has been queued a long time with no change, click{" "}
+                  <strong>Reprocess</strong> to re-enqueue.
+                </dd>
+              </>
+            ) : null}
             {viewer.processing_error ? (
               <>
                 <dt>Error</dt>
@@ -1254,13 +1283,15 @@ export function App() {
   const [newSiteName, setNewSiteName] = useState("Seattle");
   const [siteCreateBusy, setSiteCreateBusy] = useState(false);
   const [siteCreateMessage, setSiteCreateMessage] = useState<string | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  /** Optional label sent with presigned-upload (blank = unset). */
+  /** PDFs chosen for the next upload batch (max {@link MAX_UPLOAD_BATCH_SIZE}). */
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [fileSelectWarnings, setFileSelectWarnings] = useState<string[]>([]);
+  const [batchItems, setBatchItems] = useState<UploadBatchItem[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchOverallPct, setBatchOverallPct] = useState(0);
+  const [batchBanner, setBatchBanner] = useState("");
+  /** Optional label for single-file upload only (blank = unset). */
   const [uploadDisplayName, setUploadDisplayName] = useState("");
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [message, setMessage] = useState("");
-  const [uploadPct, setUploadPct] = useState(0);
-  const [result, setResult] = useState<CompleteUploadResponse | null>(null);
 
   const [docRows, setDocRows] = useState<DocumentListItemResponse[]>([]);
   const [docListLoading, setDocListLoading] = useState(false);
@@ -1275,7 +1306,8 @@ export function App() {
   const [billLoading, setBillLoading] = useState(false);
   const [billError, setBillError] = useState<string | null>(null);
   /** Bump after reprocess (or similar) to refetch viewer + bill without changing selection. */
-  const [viewerReloadNonce, setViewerReloadNonce] = useState(0);
+  /** Bumps to refetch ``/viewer`` only (not ``/bill`` — avoids poll spam). */
+  const [viewerPollNonce, setViewerPollNonce] = useState(0);
   const [reprocessBusy, setReprocessBusy] = useState(false);
   const [reprocessError, setReprocessError] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -1319,6 +1351,9 @@ export function App() {
   const [pipelineHold, setPipelineHold] = useState(false);
   const loadedViewerDocIdRef = useRef<string | null>(null);
   const loadedBillDocIdRef = useRef<string | null>(null);
+  /** Poll ticks while the open document stays ``queued`` (detect orphan queue rows). */
+  const queuedPollCountRef = useRef(0);
+  const [stuckQueuedHint, setStuckQueuedHint] = useState(false);
 
   const [orgFormName, setOrgFormName] = useState("");
   const [orgFormSlug, setOrgFormSlug] = useState("");
@@ -1330,9 +1365,13 @@ export function App() {
   const [orgCreateBusy, setOrgCreateBusy] = useState(false);
   const [orgCreateMessage, setOrgCreateMessage] = useState<string | null>(null);
 
-  const phaseAllowsSubmit = phase === "idle" || phase === "done" || phase === "error";
-
   const effectiveOrgId = useMemo(() => orgId.trim(), [orgId]);
+
+  const batchUploadSummary = useMemo(() => batchSummary(batchItems), [batchItems]);
+  const primaryUploadResult = useMemo((): CompleteUploadResponse | null => {
+    const first = batchItems.find((it) => it.status === "done" && it.result);
+    return first?.result ?? null;
+  }, [batchItems]);
   const platformAdmin = isPlatformAdmin(authUser);
   const activeOrgRole = useMemo(() => {
     if (!effectiveOrgId || !isUuid(effectiveOrgId)) return null;
@@ -1367,14 +1406,14 @@ export function App() {
     if (!canWriteActiveOrg) {
       return "You have read-only access to this organization.";
     }
-    if (!file) {
-      return "Choose a file.";
+    if (selectedFiles.length === 0) {
+      return "Choose one or more PDF files.";
     }
-    if (!phaseAllowsSubmit) {
-      return "Wait for the current step to finish.";
+    if (batchRunning) {
+      return "Wait for the current upload batch to finish.";
     }
     return null;
-  }, [apiBase, orgId, file, phaseAllowsSubmit, canWriteActiveOrg]);
+  }, [apiBase, effectiveOrgId, selectedFiles.length, batchRunning, canWriteActiveOrg]);
 
   const canSubmit = submitBlockedReason === null;
 
@@ -1483,6 +1522,15 @@ export function App() {
         if (!cancelled) {
           setDocumentViewer(v);
           loadedViewerDocIdRef.current = selectedDocId;
+          if (v.processing_status === "queued") {
+            queuedPollCountRef.current += 1;
+            if (queuedPollCountRef.current >= STUCK_QUEUED_POLL_THRESHOLD) {
+              setStuckQueuedHint(true);
+            }
+          } else {
+            queuedPollCountRef.current = 0;
+            setStuckQueuedHint(false);
+          }
         }
       })
       .catch((e) => {
@@ -1498,9 +1546,9 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDocId, orgId, apiBase, viewerReloadNonce]);
+  }, [selectedDocId, orgId, apiBase, viewerPollNonce]);
 
-  /** Load normalized bill (2d) in parallel with the viewer when a document is selected. */
+  /** Load normalized bill only after extraction succeeded (do not poll ``/bill`` while ``queued``). */
   useEffect(() => {
     if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       setDocumentBill(null);
@@ -1508,12 +1556,20 @@ export function App() {
       setBillLoading(false);
       return;
     }
-    let cancelled = false;
-    const initialLoad = loadedBillDocIdRef.current !== selectedDocId;
-    if (initialLoad) {
+    const status = documentViewer?.processing_status;
+    if (status !== "extracted") {
       setDocumentBill(null);
-      setBillLoading(true);
+      setBillError(null);
+      setBillLoading(false);
+      loadedBillDocIdRef.current = null;
+      return;
     }
+    if (loadedBillDocIdRef.current === selectedDocId) {
+      return;
+    }
+    let cancelled = false;
+    setDocumentBill(null);
+    setBillLoading(true);
     setBillError(null);
     void fetchDocumentBill(apiBase.trim(), effectiveOrgId, selectedDocId)
       .then((res) => {
@@ -1535,7 +1591,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDocId, orgId, apiBase, viewerReloadNonce]);
+  }, [selectedDocId, orgId, apiBase, documentViewer?.processing_status]);
 
   useEffect(() => {
     setAssignSiteDraft(documentViewer?.site_id ?? "");
@@ -1589,7 +1645,6 @@ export function App() {
     documentViewer?.site_id,
     documentViewer?.processing_status,
     documentBill?.site_id,
-    viewerReloadNonce,
   ]);
 
   /** Run §3b comparison when bill + site are available (same gate as prior bills). */
@@ -1633,8 +1688,7 @@ export function App() {
     apiBase,
     documentViewer?.site_id,
     documentViewer?.processing_status,
-    documentBill,
-    viewerReloadNonce,
+    documentBill?.id,
   ]);
 
   const handleApplySiteToDocument = useCallback(async () => {
@@ -1646,7 +1700,8 @@ export function App() {
     try {
       const siteId = assignSiteDraft.trim() || null;
       await patchDocumentSite(apiBase.trim(), effectiveOrgId, selectedDocId, siteId);
-      setViewerReloadNonce((n) => n + 1);
+      loadedBillDocIdRef.current = null;
+      setViewerPollNonce((n) => n + 1);
       if (siteId) {
         setSelectedSiteId(siteId);
         storeSiteIdForOrg(effectiveOrgId, siteId);
@@ -1721,52 +1776,76 @@ export function App() {
     }
   }, [selectedDocId, effectiveOrgId, apiBase]);
 
-  /** Clear pipeline overlay once extraction finished and fetches are idle. */
+  /** Release reprocess overlay once the worker reaches a terminal status or queue wait. */
   useEffect(() => {
     if (!pipelineHold) {
       return;
     }
     const st = documentViewer?.processing_status;
-    const terminal = st === "extracted" || st === "failed" || st === "unsupported";
-    if (terminal && !viewerLoading && !billLoading) {
-      setPipelineHold(false);
-    }
-  }, [pipelineHold, documentViewer?.processing_status, viewerLoading, billLoading]);
-
-  const runUpload = useCallback(async () => {
-    if (!file || !effectiveOrgId) {
-      setPhase("error");
-      setMessage("Choose a file and set Organization ID.");
+    if (!st) {
       return;
     }
-    setResult(null);
-    closeViewer();
-    setUploadPct(0);
-    try {
-      setPhase("presigning");
-      setMessage("Requesting presigned upload…");
-      const presign = await presignUpload(apiBase.trim(), effectiveOrgId, file, {
-        siteId: selectedSiteId.trim() || null,
-        displayName: uploadDisplayName.trim() || null,
-      });
-
-      setPhase("uploading");
-      setMessage("Uploading to object storage…");
-      await putFileToPresignedUrl(file, presign.upload_url, presign.headers, (loaded, total) => {
-        setUploadPct(total > 0 ? Math.round((100 * loaded) / total) : 0);
-      });
-
-      setPhase("completing");
-      setMessage("Finalizing document (server-side hash)…");
-      const done = await completeUpload(apiBase.trim(), effectiveOrgId, presign.document_id);
-      setResult(done);
-      setPhase("done");
-      setMessage("Upload complete.");
-    } catch (e) {
-      setPhase("error");
-      setMessage(e instanceof Error ? e.message : String(e));
+    if (TERMINAL_PROCESSING_STATUSES.has(st)) {
+      setPipelineHold(false);
+      return;
     }
-  }, [apiBase, orgId, file, closeViewer, selectedSiteId, uploadDisplayName]);
+    if ((st === "queued" || st === "pending") && !reprocessBusy) {
+      setPipelineHold(false);
+    }
+  }, [pipelineHold, documentViewer?.processing_status, reprocessBusy]);
+
+  const runUpload = useCallback(async () => {
+    if (selectedFiles.length === 0 || !effectiveOrgId) {
+      setBatchBanner("Choose at least one PDF and set Organization ID.");
+      return;
+    }
+    closeViewer();
+    setBatchItems([]);
+    setBatchOverallPct(0);
+    setBatchRunning(true);
+    setBatchBanner(
+      selectedFiles.length === 1
+        ? "Uploading 1 file…"
+        : `Uploading ${selectedFiles.length} files (one at a time)…`,
+    );
+    try {
+      const items = await runUploadBatch({
+        apiBase: apiBase.trim(),
+        orgId: effectiveOrgId,
+        files: selectedFiles,
+        siteId: selectedSiteId.trim() || null,
+        displayName: selectedFiles.length === 1 ? uploadDisplayName : null,
+        onProgress: (state) => {
+          setBatchItems(state.items);
+          setBatchOverallPct(state.overallPct);
+          if (state.total > 0) {
+            const active = state.items[state.currentIndex];
+            const name = active?.file.name ?? "";
+            setBatchBanner(
+              `File ${state.currentIndex + 1} of ${state.total}${name ? `: ${name}` : ""}…`,
+            );
+          }
+        },
+      });
+      setBatchItems(items);
+      const summary = batchSummary(items);
+      if (summary.failed === 0) {
+        setBatchBanner(
+          summary.total === 1
+            ? "Upload complete."
+            : `All ${summary.succeeded} files uploaded.`,
+        );
+      } else {
+        setBatchBanner(
+          `${summary.succeeded} of ${summary.total} uploaded; ${summary.failed} failed. See details below.`,
+        );
+      }
+    } catch (e) {
+      setBatchBanner(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBatchRunning(false);
+    }
+  }, [apiBase, effectiveOrgId, selectedFiles, closeViewer, selectedSiteId, uploadDisplayName]);
 
   const loadDocumentList = useCallback(async () => {
     // Org may still be loading from sidebar — avoid flashing a bogus error (poll / navigation race).
@@ -1787,6 +1866,13 @@ export function App() {
       setDocListLoading(false);
     }
   }, [apiBase, effectiveOrgId]);
+
+  /** Refresh document list after a batch finishes with at least one success. */
+  useEffect(() => {
+    if (!batchRunning && batchUploadSummary.succeeded > 0) {
+      void loadDocumentList();
+    }
+  }, [batchRunning, batchUploadSummary.succeeded, loadDocumentList]);
 
   const loadAnomalyList = useCallback(
     async (opts?: { materializeFirst?: boolean }) => {
@@ -1953,25 +2039,47 @@ export function App() {
     void loadDocumentList();
   }, [view, apiBase, effectiveOrgId, loadDocumentList]);
 
-  /** Poll viewer + bill while pipeline may still be running (no full-page reload). */
+  /** Reset stuck-queue detection when the user opens a different document. */
+  useEffect(() => {
+    queuedPollCountRef.current = 0;
+    setStuckQueuedHint(false);
+  }, [selectedDocId]);
+
+  /** Poll ``GET …/viewer`` only while the worker may advance; stop when stuck ``queued``. */
   useEffect(() => {
     if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
       return;
     }
     const status = documentViewer?.processing_status;
-    const busy = status === "queued" || status === "pending" || status === "received";
-    if (!busy) {
+    if (!status || TERMINAL_PROCESSING_STATUSES.has(status)) {
       return;
     }
-    const tick = () => {
-      setViewerReloadNonce((n) => n + 1);
-      if (view === "documents") {
-        void loadDocumentList();
-      }
-    };
-    const id = window.setInterval(tick, PIPELINE_POLL_MS);
+    if (!PIPELINE_POLL_STATUSES.has(status)) {
+      return;
+    }
+    if (status === "queued" && stuckQueuedHint) {
+      return;
+    }
+    const pollMs = status === "queued" ? PIPELINE_POLL_QUEUED_MS : PIPELINE_POLL_MS;
+    const id = window.setInterval(() => {
+      setViewerPollNonce((n) => n + 1);
+    }, pollMs);
     return () => window.clearInterval(id);
-  }, [selectedDocId, orgId, apiBase, documentViewer?.processing_status, view, loadDocumentList]);
+  }, [
+    selectedDocId,
+    effectiveOrgId,
+    apiBase,
+    documentViewer?.processing_status,
+    stuckQueuedHint,
+  ]);
+
+  /** Refresh the documents table when processing status changes (not on every poll tick). */
+  useEffect(() => {
+    if (view !== "documents" || !documentViewer?.processing_status) {
+      return;
+    }
+    void loadDocumentList();
+  }, [view, documentViewer?.processing_status, loadDocumentList]);
 
   const loadOrganizationsList = useCallback(async () => {
     if (!apiBase.trim()) {
@@ -2087,14 +2195,18 @@ export function App() {
     setReprocessBusy(true);
     setReprocessError(null);
     setPipelineHold(true);
+    queuedPollCountRef.current = 0;
+    setStuckQueuedHint(false);
+    loadedBillDocIdRef.current = null;
     try {
       await reprocessDocument(apiBase.trim(), effectiveOrgId, selectedDocId);
-      setViewerReloadNonce((n) => n + 1);
+      setViewerPollNonce((n) => n + 1);
       if (view === "documents") {
         void loadDocumentList();
       }
     } catch (e) {
       setReprocessError(e instanceof Error ? e.message : String(e));
+      setPipelineHold(false);
     } finally {
       setReprocessBusy(false);
     }
@@ -2125,22 +2237,25 @@ export function App() {
     }
   }, [selectedDocId, orgId, apiBase, documentViewer?.document_id, closeViewer, view, loadDocumentList]);
 
-  const pipelineStatusBusy =
+  const pipelineStatusOverlay =
     !!documentViewer &&
-    PIPELINE_BUSY_STATUSES.has(documentViewer.processing_status);
+    PIPELINE_OVERLAY_STATUSES.has(documentViewer.processing_status);
 
-  const pipelineBusy =
+  const pipelineOverlayBusy =
     reprocessBusy ||
     pipelineHold ||
-    pipelineStatusBusy ||
-    (viewerLoading && !documentViewer) ||
-    (billLoading && !documentBill);
+    pipelineStatusOverlay ||
+    (viewerLoading && !documentViewer);
 
-  const pipelineBusyLabel = reprocessBusy
+  const pipelineOverlayLabel = reprocessBusy
     ? "Starting reprocess…"
-    : pipelineStatusBusy
-      ? "Document is being processed…"
-      : "Updating bill…";
+    : pipelineHold
+      ? "Waiting for worker…"
+      : pipelineStatusOverlay
+        ? "Extracting bill from PDF…"
+        : viewerLoading && !documentViewer
+          ? "Loading document…"
+          : undefined;
 
   const viewerSiteProps = {
     sites: siteRows,
@@ -2455,8 +2570,11 @@ export function App() {
           {view === "upload" && (
         <>
           <section className="card">
-            <h2>Send your file</h2>
-            <p className="card-subtitle">PDFs go straight to secure storage, then the worker extracts and normalizes the bill.</p>
+            <h2>Send your files</h2>
+            <p className="card-subtitle">
+              Upload up to <strong>{MAX_UPLOAD_BATCH_SIZE}</strong> PDFs at once (50 MB each). Files upload
+              one at a time, then each enters the extraction pipeline.
+            </p>
             {selectedSiteId && siteRows.some((s) => s.id === selectedSiteId) ? (
               <p className="hint">
                 Uploads will use site: <strong>{siteRows.find((s) => s.id === selectedSiteId)?.name}</strong>
@@ -2467,29 +2585,56 @@ export function App() {
             <input
               type="file"
               accept="application/pdf,.pdf"
+              multiple
+              disabled={batchRunning}
               onChange={(e) => {
-                setFile(e.target.files?.[0] ?? null);
-                setPhase("idle");
-                setMessage("");
-                setResult(null);
+                const { files, warnings } = normalizeSelectedPdfFiles(e.target.files);
+                setSelectedFiles(files);
+                setFileSelectWarnings(warnings);
+                setBatchItems([]);
+                setBatchBanner("");
               }}
             />
-            {file ? (
-              <p className="filemeta">
-                Selected: <strong>{file.name}</strong> — {(file.size / 1024).toFixed(1)} KiB
+            {selectedFiles.length > 0 ? (
+              <ul className="upload-file-list">
+                {selectedFiles.map((f) => (
+                  <li key={`${f.name}-${f.size}-${f.lastModified}`}>
+                    <strong>{f.name}</strong>
+                    <span className="upload-file-list__meta">
+                      {(f.size / 1024).toFixed(1)} KiB
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="filemeta">No files selected.</p>
+            )}
+            {fileSelectWarnings.length > 0 ? (
+              <ul className="upload-warnings">
+                {fileSelectWarnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            ) : null}
+            {selectedFiles.length === 1 ? (
+              <label className="upload-name-field">
+                <span className="upload-name-label">Document name (optional)</span>
+                <input
+                  type="text"
+                  className="doc-name-input"
+                  value={uploadDisplayName}
+                  maxLength={255}
+                  placeholder="e.g. March 2026 — Main Street"
+                  disabled={batchRunning}
+                  onChange={(e) => setUploadDisplayName(e.target.value)}
+                />
+              </label>
+            ) : selectedFiles.length > 1 ? (
+              <p className="hint">
+                Optional display name applies only when uploading a single file. Multi-file batches use
+                each PDF file name in the document list until you rename them in the viewer.
               </p>
             ) : null}
-            <label className="upload-name-field">
-              <span className="upload-name-label">Document name (optional)</span>
-              <input
-                type="text"
-                className="doc-name-input"
-                value={uploadDisplayName}
-                maxLength={255}
-                placeholder="e.g. March 2026 — Main Street"
-                onChange={(e) => setUploadDisplayName(e.target.value)}
-              />
-            </label>
             <div className="actions">
               <button
                 type="button"
@@ -2497,30 +2642,48 @@ export function App() {
                 title={submitBlockedReason ?? undefined}
                 onClick={() => void runUpload()}
               >
-                Upload
+                {selectedFiles.length <= 1
+                  ? "Upload"
+                  : `Upload ${selectedFiles.length} files`}
               </button>
             </div>
             {submitBlockedReason ? <p className="upload-hint">{submitBlockedReason}</p> : null}
-            {phase !== "idle" && phase !== "error" ? (
+            {batchRunning || batchBanner ? (
               <div className="progress-wrap" aria-live="polite">
                 <div className="progress-track">
                   <div
                     className="progress-bar"
                     style={{
-                      width: `${phase === "uploading" ? uploadPct : phase === "done" ? 100 : phase === "completing" ? 92 : 8}%`,
+                      width: `${batchRunning ? batchOverallPct : batchUploadSummary.succeeded > 0 ? 100 : 8}%`,
                     }}
                   />
                 </div>
-                <p className="status">{message}</p>
+                {batchBanner ? <p className="status">{batchBanner}</p> : null}
               </div>
             ) : null}
-            {phase === "error" ? <p className="error">{message}</p> : null}
+            {batchItems.length > 0 ? (
+              <ul className="upload-batch-status">
+                {batchItems.map((it) => (
+                  <li
+                    key={it.key}
+                    className={`upload-batch-status__item upload-batch-status__item--${it.status}`}
+                  >
+                    <span className="upload-batch-status__name">{it.file.name}</span>
+                    <span className="upload-batch-status__msg">{it.message}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </section>
 
-          {result ? (
+          {!batchRunning && batchUploadSummary.succeeded > 0 ? (
             <section className="card success">
               <h2>Done</h2>
-              <p className="card-subtitle">Your upload is registered. Open it below or jump to the full list.</p>
+              <p className="card-subtitle">
+                {batchUploadSummary.total === 1
+                  ? "Your upload is registered. Open it below or jump to the full list."
+                  : `${batchUploadSummary.succeeded} of ${batchUploadSummary.total} files registered. Workers will extract each bill in the background.`}
+              </p>
               {selectedSiteId && siteRows.some((s) => s.id === selectedSiteId) ? (
                 <p className="hint upload-baseline-note">
                   If this is the <strong>first bill</strong> at{" "}
@@ -2534,57 +2697,92 @@ export function App() {
                   so bills at the same location can be compared over time.
                 </p>
               )}
-              <dl className="kv">
-                <dt>Document ID</dt>
-                <dd>
-                  <code>{result.document_id}</code>
-                </dd>
-                <dt>SHA-256</dt>
-                <dd>
-                  <code>{result.sha256}</code>
-                </dd>
-                <dt>Size</dt>
-                <dd>{result.byte_size} bytes</dd>
-                <dt>Status</dt>
-                <dd>
-                  <span className={statusPillClass(result.processing_status)}>{result.processing_status}</span>
-                </dd>
-                {result.processing_error ? (
-                  <>
-                    <dt>Error</dt>
-                    <dd className="cell-error-inline">{result.processing_error}</dd>
-                  </>
-                ) : null}
-              </dl>
+              {batchUploadSummary.total > 1 ? (
+                <ul className="upload-batch-results">
+                  {batchItems
+                    .filter((it) => it.status === "done" && it.result)
+                    .map((it) => (
+                      <li key={it.key}>
+                        <strong>{it.file.name}</strong>
+                        <span className={statusPillClass(it.result!.processing_status)}>
+                          {it.result!.processing_status}
+                        </span>
+                        <button
+                          type="button"
+                          className="secondary upload-batch-results__open"
+                          onClick={() => openDocumentInViewer(it.result!.document_id)}
+                        >
+                          Open
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              ) : primaryUploadResult ? (
+                <dl className="kv">
+                  <dt>Document ID</dt>
+                  <dd>
+                    <code>{primaryUploadResult.document_id}</code>
+                  </dd>
+                  <dt>SHA-256</dt>
+                  <dd>
+                    <code>{primaryUploadResult.sha256}</code>
+                  </dd>
+                  <dt>Size</dt>
+                  <dd>{primaryUploadResult.byte_size} bytes</dd>
+                  <dt>Status</dt>
+                  <dd>
+                    <span className={statusPillClass(primaryUploadResult.processing_status)}>
+                      {primaryUploadResult.processing_status}
+                    </span>
+                  </dd>
+                  {primaryUploadResult.processing_error ? (
+                    <>
+                      <dt>Error</dt>
+                      <dd className="cell-error-inline">{primaryUploadResult.processing_error}</dd>
+                    </>
+                  ) : null}
+                </dl>
+              ) : null}
               <div className="actions-row">
-                <button type="button" className="secondary" onClick={() => openDocumentInViewer(result.document_id)}>
-                  Load preview &amp; detail
-                </button>
+                {primaryUploadResult && batchUploadSummary.total === 1 ? (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => openDocumentInViewer(primaryUploadResult.document_id)}
+                  >
+                    Load preview &amp; detail
+                  </button>
+                ) : null}
                 <button type="button" className="secondary" onClick={() => void goToDocuments()}>
                   All documents
                 </button>
               </div>
-              <DocumentViewerPanel
-                headerDocumentId={selectedDocId}
-                viewer={documentViewer?.document_id === result.document_id ? documentViewer : null}
-                loading={viewerLoading && selectedDocId === result.document_id}
-                error={selectedDocId === result.document_id ? viewerError : null}
-                bill={selectedDocId === result.document_id ? documentBill : null}
-                billLoading={selectedDocId === result.document_id ? billLoading : false}
-                billError={selectedDocId === result.document_id ? billError : null}
-                onClose={closeViewer}
-                onReprocess={() => void handleReprocessSelected()}
-                reprocessBusy={reprocessBusy}
-                reprocessError={reprocessError}
-                pipelineBusy={
-                  pipelineBusy &&
-                  !!documentViewer &&
-                  documentViewer.document_id === result.document_id &&
-                  selectedDocId === result.document_id
-                }
-                pipelineBusyLabel={pipelineBusyLabel}
-                {...viewerSiteProps}
-              />
+              {primaryUploadResult && batchUploadSummary.total === 1 ? (
+                <DocumentViewerPanel
+                  headerDocumentId={selectedDocId}
+                  viewer={
+                    documentViewer?.document_id === primaryUploadResult.document_id ? documentViewer : null
+                  }
+                  loading={viewerLoading && selectedDocId === primaryUploadResult.document_id}
+                  error={selectedDocId === primaryUploadResult.document_id ? viewerError : null}
+                  bill={selectedDocId === primaryUploadResult.document_id ? documentBill : null}
+                  billLoading={selectedDocId === primaryUploadResult.document_id ? billLoading : false}
+                  billError={selectedDocId === primaryUploadResult.document_id ? billError : null}
+                  onClose={closeViewer}
+                  onReprocess={() => void handleReprocessSelected()}
+                  reprocessBusy={reprocessBusy}
+                  reprocessError={reprocessError}
+                  pipelineOverlayBusy={
+                    pipelineOverlayBusy &&
+                    !!documentViewer &&
+                    documentViewer.document_id === primaryUploadResult.document_id &&
+                    selectedDocId === primaryUploadResult.document_id
+                  }
+                  pipelineOverlayLabel={pipelineOverlayLabel}
+                  stuckQueuedHint={stuckQueuedHint}
+                  {...viewerSiteProps}
+                />
+              ) : null}
             </section>
           ) : null}
         </>
@@ -2698,8 +2896,9 @@ export function App() {
             onReprocess={() => void handleReprocessSelected()}
             reprocessBusy={reprocessBusy}
             reprocessError={reprocessError}
-            pipelineBusy={pipelineBusy}
-            pipelineBusyLabel={pipelineBusyLabel}
+            pipelineOverlayBusy={pipelineOverlayBusy}
+            pipelineOverlayLabel={pipelineOverlayLabel}
+            stuckQueuedHint={stuckQueuedHint}
             {...viewerSiteProps}
           />
         </div>

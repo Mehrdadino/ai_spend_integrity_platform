@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.repositories.bills import get_prior_bills_for_org_document
 from app.schemas.comparison import DocumentComparisonResponse
+from app.services.comparison.locking import acquire_site_comparison_lock
 from app.services.comparison.period import effective_period_end
 from app.services.comparison.persist_anomalies import replace_anomalies_for_comparison
 from app.services.comparison.rule_pack_v1 import evaluate_rule_pack_v1
@@ -53,6 +54,9 @@ def evaluate_document_comparison(
     compared_period = None
     if compared_id is not None and priors:
         compared_period = effective_period_end(priors[0])
+
+    if current.site_id is not None:
+        acquire_site_comparison_lock(session, site_id=current.site_id)
 
     replace_anomalies_for_comparison(
         session,

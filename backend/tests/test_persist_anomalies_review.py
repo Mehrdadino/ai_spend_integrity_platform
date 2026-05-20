@@ -81,6 +81,53 @@ class TestPersistAnomaliesReviewPreserve(unittest.TestCase):
         session.delete.assert_not_called()
         session.flush.assert_called_once()
 
+    def test_replace_deletes_other_rule_pack_before_insert(self) -> None:
+        """Site unique index omits rule_pack_version; stale rows must not block new pack."""
+        bill = _bill()
+        fp = "no_prior_bill|none|" + str(bill.id)
+        old_pack_row = Anomaly(
+            id=uuid.uuid4(),
+            organization_id=bill.organization_id,
+            site_id=bill.site_id,
+            document_id=bill.document_id,
+            bill_id=bill.id,
+            rule_pack_version="comparison-v1.2",
+            rule_id="no_prior_bill",
+            period_end=date(2026, 3, 31),
+            fingerprint=fp,
+            severity="info",
+            title="Old pack",
+            summary="Old",
+            evidence={},
+            review_status="open",
+        )
+
+        session = MagicMock()
+        session.scalars.return_value.all.return_value = [old_pack_row]
+
+        findings = [
+            ComparisonFindingResponse(
+                rule_id="no_prior_bill",
+                severity="info",
+                title="First bill at this site (baseline)",
+                summary="Baseline",
+                evidence={},
+            )
+        ]
+        replace_anomalies_for_comparison(
+            session,
+            current=bill,
+            compared_to_bill_id=None,
+            findings=findings,
+            rule_pack_version=RULE_PACK_VERSION,
+        )
+
+        session.delete.assert_called_once_with(old_pack_row)
+        session.add.assert_called_once()
+        added = session.add.call_args[0][0]
+        self.assertEqual(added.rule_pack_version, RULE_PACK_VERSION)
+        self.assertEqual(added.fingerprint, fp)
+
 
 if __name__ == "__main__":
     unittest.main()

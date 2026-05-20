@@ -57,7 +57,18 @@ def main() -> None:
         listen,
         settings.redis_url,
     )
+    settings = get_settings()
     worker = worker_cls(listen, connection=redis_conn)
+    logger.info(
+        "Job timeouts (enqueue): document=%ss comparison=%ss; LLM HTTP=%ss",
+        settings.rq_document_job_timeout_seconds,
+        settings.rq_comparison_job_timeout_seconds,
+        settings.extraction_llm_timeout_seconds,
+    )
+    if use_simple:
+        logger.info(
+            "SimpleWorker: one job at a time (bulk uploads queue behind the active job)."
+        )
     worker.work(with_scheduler=False)
 
 

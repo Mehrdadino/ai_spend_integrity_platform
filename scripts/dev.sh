@@ -2,6 +2,11 @@
 # Start local dependencies (Postgres, MinIO, Redis) plus API, RQ worker, and Vite in one terminal.
 # Usage from repo root:  ./scripts/dev.sh   or   bash scripts/dev.sh
 #
+# Parallel workers (same Redis ``documents`` queue): start N RQ processes, e.g.
+#   DOCUMENT_WORKER_COUNT=3 ./scripts/dev.sh
+# On macOS, fork-based ``Worker`` may be more reliable for parallelism than ``SimpleWorker``:
+#   RQ_USE_SIMPLE_WORKER=0 DOCUMENT_WORKER_COUNT=3 ./scripts/dev.sh
+#
 # Prerequisites: Docker running; ``uv`` on PATH (see bootstrap script). This script creates
 # ``backend/.venv`` on first run and runs ``uv sync`` when deps change — no manual pip needed.
 # frontend deps (cd frontend && npm install). Stop everything with Ctrl+C.
@@ -94,9 +99,21 @@ echo ""
 if [[ "${SKIP_DOCUMENT_WORKER:-}" == "1" ]]; then
   echo "==> SKIP_DOCUMENT_WORKER=1 — not starting RQ document-worker"
 else
-  echo "==> document worker (RQ, queue documents; SimpleWorker on macOS — see run_rq_worker docstring)"
-  (cd "$ROOT/backend" && exec "${PY}" -m app.scripts.run_rq_worker) &
-  PIDS+=("$!")
+  WORKER_COUNT="${DOCUMENT_WORKER_COUNT:-1}"
+  if ! [[ "$WORKER_COUNT" =~ ^[0-9]+$ ]] || [[ "$WORKER_COUNT" -lt 1 ]]; then
+    echo "WARNING: DOCUMENT_WORKER_COUNT must be a positive integer; using 1"
+    WORKER_COUNT=1
+  fi
+  if [[ "$WORKER_COUNT" -gt 1 ]] && [[ "$(uname -s)" == "Darwin" ]] && [[ "${RQ_USE_SIMPLE_WORKER:-}" != "0" ]]; then
+    echo "NOTE: macOS defaults to SimpleWorker (one job at a time *per process*)."
+    echo "      With ${WORKER_COUNT} workers you still get ${WORKER_COUNT} concurrent jobs if each process is busy."
+    echo "      For fork-based workers: RQ_USE_SIMPLE_WORKER=0 DOCUMENT_WORKER_COUNT=${WORKER_COUNT} ./scripts/dev.sh"
+  fi
+  echo "==> document worker x${WORKER_COUNT} (RQ queue documents; see backend app.scripts.run_rq_worker)"
+  for ((w = 1; w <= WORKER_COUNT; w++)); do
+    (cd "$ROOT/backend" && exec "${PY}" -m app.scripts.run_rq_worker) &
+    PIDS+=("$!")
+  done
 fi
 
 echo "==> API http://127.0.0.1:8000 (uvicorn --reload)"

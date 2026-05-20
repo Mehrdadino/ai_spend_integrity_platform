@@ -10,14 +10,12 @@ from __future__ import annotations
 import logging
 import uuid
 
-from redis import Redis
-from rq import Queue
-
 from app.config import get_settings
 from app.jobs.comparison_jobs import (
     run_document_comparison_backfill_job,
     run_site_comparison_refresh_job,
 )
+from app.services.rq_enqueue import enqueue_documents_job
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +29,12 @@ def enqueue_document_comparison_backfill(document_id: uuid.UUID) -> None:
             document_id,
         )
         return
-    conn = Redis.from_url(settings.redis_url)
-    queue = Queue("documents", connection=conn)
-    queue.enqueue(run_document_comparison_backfill_job, str(document_id))
+    enqueue_documents_job(
+        run_document_comparison_backfill_job,
+        str(document_id),
+        job_timeout_seconds=settings.rq_comparison_job_timeout_seconds,
+        description="comparison_backfill",
+    )
     logger.info("comparison_queue: enqueued comparison backfill document=%s", document_id)
 
 
@@ -58,12 +59,12 @@ def enqueue_site_comparison_refresh(organization_id: uuid.UUID, site_id: uuid.UU
             site_id,
         )
         return
-    conn = Redis.from_url(settings.redis_url)
-    queue = Queue("documents", connection=conn)
-    queue.enqueue(
+    enqueue_documents_job(
         run_site_comparison_refresh_job,
         str(organization_id),
         str(site_id),
+        job_timeout_seconds=settings.rq_comparison_job_timeout_seconds,
+        description="site_comparison_refresh",
     )
     logger.info(
         "comparison_queue: enqueued site comparison refresh org=%s site=%s",
