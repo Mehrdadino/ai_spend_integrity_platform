@@ -1685,7 +1685,7 @@ button.btn-danger:hover:not(:disabled) {
   font-size: 0.78rem;
 }
 
-/* ── Site / connection helpers (kept for the Organizations tab) ─────────────── */
+/* ── Site management helpers (Sites tab) ─────────────────────────────────────── */
 .connection-sites {
   margin-top: 1.25rem;
   padding-top: 1rem;

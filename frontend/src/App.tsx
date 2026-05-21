@@ -16,6 +16,7 @@ import { createPortal } from "react-dom";
 import { AnomalyDocumentFilter } from "./components/AnomalyDocumentFilter";
 import { AccountPage } from "./AccountPage";
 import { OrganizationTeamPanel } from "./components/OrganizationTeamPanel";
+import { SitesManagementPanel } from "./components/SitesManagementPanel";
 import { PdfGeneratorPage } from "./components/PdfGeneratorPage";
 import { formatMoney } from "./lib/format";
 import { LoginPage } from "./LoginPage";
@@ -69,7 +70,7 @@ import {
   runUploadBatch,
   type UploadBatchItem,
 } from "./lib/uploadBatch";
-type AppView = "upload" | "documents" | "anomalies" | "organizations" | "account" | "pdf-generator";
+type AppView = "upload" | "documents" | "anomalies" | "organizations" | "sites" | "account" | "pdf-generator";
 
 const defaultApiBase = "http://127.0.0.1:8000";
 
@@ -965,7 +966,7 @@ function DocumentViewerPanel({
               )}
               {assignSiteError ? <p className="error site-assign-error">{assignSiteError}</p> : null}
               {!viewer.site_id && sites && sites.length === 0 ? (
-                <p className="hint">Create a site under Connection, then assign it here for bill history.</p>
+                <p className="hint">Create a site on the Sites tab, then assign it here for bill history.</p>
               ) : null}
             </dd>
             <dt>Source</dt>
@@ -2148,6 +2149,22 @@ export function App() {
     void loadOrganizationsList();
   }, [closeViewer, loadOrganizationsList]);
 
+  const goToSites = useCallback(() => {
+    setView("sites");
+    closeViewer();
+    void loadSitesList();
+  }, [closeViewer, loadSitesList]);
+
+  const handleSelectSiteFromPanel = useCallback(
+    (siteId: string) => {
+      setSelectedSiteId(siteId);
+      if (isUuid(effectiveOrgId)) {
+        storeSiteIdForOrg(effectiveOrgId, siteId);
+      }
+    },
+    [effectiveOrgId],
+  );
+
   const goToUpload = useCallback(() => {
     setView("upload");
     closeViewer();
@@ -2346,11 +2363,13 @@ export function App() {
         ? "Documents"
         : view === "anomalies"
           ? "Anomaly inbox"
-          : view === "account"
-            ? "Account settings"
-            : view === "pdf-generator"
-              ? "PDF Generator"
-              : "Organizations";
+          : view === "sites"
+            ? "Sites"
+            : view === "account"
+              ? "Account settings"
+              : view === "pdf-generator"
+                ? "PDF Generator"
+                : "Organizations";
 
   const currentPageSubtitle =
     view === "upload"
@@ -2359,11 +2378,13 @@ export function App() {
         ? "Track processing, open the PDF and extracted bill, assign a site, and see comparison insights alongside prior months."
         : view === "anomalies"
           ? "Saved comparison signals across your organization. Use filters to narrow by bill or review status."
-          : view === "account"
-            ? "Update your login email and password."
-            : view === "pdf-generator"
-              ? "Generate synthetic utility bills with embedded text for pipeline testing. Bills are created entirely in the browser — no API call needed."
-              : "Create and manage organizations, sites, and team members.";
+          : view === "sites"
+            ? "Create and manage locations within your organization. Bills at the same site are compared over time."
+            : view === "account"
+              ? "Update your login email and password."
+              : view === "pdf-generator"
+                ? "Generate synthetic utility bills with embedded text for pipeline testing. Bills are created entirely in the browser — no API call needed."
+                : "Create and manage organizations and team members.";
 
   return (
     <div className="app-shell">
@@ -2419,6 +2440,16 @@ export function App() {
             {/* Organizations / building icon */}
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
             <span>Organizations</span>
+          </button>
+          <button
+            type="button"
+            className={`sidebar-nav__item${view === "sites" ? " active" : ""}`}
+            onClick={() => void goToSites()}
+            aria-current={view === "sites" ? "page" : undefined}
+          >
+            {/* Sites / map pin icon */}
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <span>Sites</span>
           </button>
           <button
             type="button"
@@ -2580,7 +2611,10 @@ export function App() {
                 Uploads will use site: <strong>{siteRows.find((s) => s.id === selectedSiteId)?.name}</strong>
               </p>
             ) : (
-              <p className="hint">Select a site in the sidebar so bills can be compared by location.</p>
+              <p className="hint">
+                Select a site in the sidebar (or create one on the <strong>Sites</strong> tab) so bills can
+                be compared by location.
+              </p>
             )}
             <input
               type="file"
@@ -3070,84 +3104,6 @@ export function App() {
             ) : null}
           </section>
 
-          {/* Sites management — create new sites, view existing */}
-          <section className="card">
-            <h2>Sites</h2>
-            <p className="card-subtitle">
-              Sites (locations) let bills at the same location be compared over time. Select an organization
-              in the sidebar first, then create sites here.
-            </p>
-            <p className="hint">
-              Bills for the <strong>same site</strong> are compared month over month. Pick a site in the sidebar
-              before uploading; assign it on old bills in the document viewer.
-            </p>
-            {siteListError ? <p className="error">{siteListError}</p> : null}
-            <div className="connection-sites-create">
-              <label className="field field--inline">
-                <span>New site name</span>
-                <input
-                  value={newSiteName}
-                  onChange={(e) => setNewSiteName(e.target.value)}
-                  placeholder="Seattle"
-                  disabled={!isUuid(effectiveOrgId)}
-                />
-              </label>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!canManageActiveOrg || siteCreateBusy}
-                onClick={() => void handleCreateSite()}
-              >
-                {siteCreateBusy ? "Creating…" : "Create site"}
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!isUuid(effectiveOrgId) || siteListLoading}
-                onClick={() => void loadSitesList()}
-              >
-                Refresh sites
-              </button>
-            </div>
-            {siteCreateMessage ? <p className="hint">{siteCreateMessage}</p> : null}
-            {siteRows.length > 0 ? (
-              <div className="table-wrap" style={{ marginTop: "0.85rem" }}>
-                <table className="doc-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Site ID</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {siteRows.map((s) => (
-                      <tr
-                        key={s.id}
-                        className={`doc-table__row${selectedSiteId === s.id ? " doc-table__row--selected" : ""}`}
-                        onClick={() => {
-                          setSelectedSiteId(s.id);
-                          if (isUuid(effectiveOrgId)) storeSiteIdForOrg(effectiveOrgId, s.id);
-                        }}
-                      >
-                        <td>
-                          {s.name}
-                          {selectedSiteId === s.id ? (
-                            <span style={{ marginLeft: "0.5rem", fontSize: "0.72rem", color: "var(--ok)" }}>
-                              ✓ active
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className="cell-mono cell-id">{s.id}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : !siteListLoading && isUuid(effectiveOrgId) ? (
-              <p className="hint" style={{ marginTop: "0.5rem" }}>No sites yet for this organization.</p>
-            ) : null}
-          </section>
-
           {effectiveOrgId && isUuid(effectiveOrgId) && canManageActiveOrg ? (
             <OrganizationTeamPanel
               apiBase={apiBase}
@@ -3156,6 +3112,24 @@ export function App() {
             />
           ) : null}
         </>
+      )}
+      {view === "sites" && (
+        <SitesManagementPanel
+          organizationName={activeOrgName ?? null}
+          organizationReady={isUuid(effectiveOrgId)}
+          canManage={canManageActiveOrg}
+          sites={siteRows}
+          listLoading={siteListLoading}
+          listError={siteListError}
+          selectedSiteId={selectedSiteId}
+          newSiteName={newSiteName}
+          onNewSiteNameChange={setNewSiteName}
+          createBusy={siteCreateBusy}
+          createMessage={siteCreateMessage}
+          onCreate={() => void handleCreateSite()}
+          onRefresh={() => void loadSitesList()}
+          onSelectSite={handleSelectSiteFromPanel}
+        />
       )}
           {view === "account" && authUser ? (
             <AccountPage
