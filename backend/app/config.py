@@ -86,7 +86,8 @@ class Settings(BaseSettings):
     auth_reset_expire_minutes: int = 60
     # Base URL for links in password-reset emails (Vite dev server by default).
     auth_frontend_base_url: str = "http://127.0.0.1:5173"
-    # SMTP: leave host empty to log auth emails to the API process (local dev).
+    # SMTP: leave host empty to log auth/invite emails to the API process only.
+    # Local dev: ``docker compose`` Mailpit on 127.0.0.1:1025 (``scripts/dev.sh`` sets this).
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""

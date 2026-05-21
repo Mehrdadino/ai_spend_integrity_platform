@@ -89,7 +89,9 @@ export function OrganizationTeamPanel({
             setInviteMessage(null);
             try {
               await createOrganizationInvite(apiBase, organizationId, inviteEmail.trim(), inviteRole);
-              setInviteMessage("Invite sent (check email or API logs in dev).");
+              setInviteMessage(
+                "Invite sent. Check the recipient inbox, or Mailpit at http://127.0.0.1:8025 when running ./scripts/dev.sh.",
+              );
               setInviteEmail("");
               await reload();
             } catch (e) {

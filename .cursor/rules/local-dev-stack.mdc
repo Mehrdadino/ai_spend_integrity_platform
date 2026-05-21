@@ -53,7 +53,8 @@ cd /path/to/ai_spend_integrity_platform
 ./scripts/dev.sh
 ```
 
-- Starts **Postgres (15432)**, **MinIO**, **Redis**, **RQ document worker**, **Uvicorn** (`http://127.0.0.1:8000`), **Vite** (`http://127.0.0.1:5173`).
+- Starts **Postgres (15432)**, **MinIO**, **Redis**, **Mailpit** (SMTP **1025**, inbox **http://127.0.0.1:8025**), **RQ document worker**, **Uvicorn** (`http://127.0.0.1:8000`), **Vite** (`http://127.0.0.1:5173`).
+- **Org invites / login OTP / password reset** use Mailpit when started via **`dev.sh`** (not only API logs). If you run uvicorn yourself, copy SMTP settings from **`backend/.env.example`**.
 - Waits for Postgres, runs **`seed-dev-org`** (dev org UUID) and **`seed-dev-user`** (default admin login for the UI).
 - **Ctrl+C** stops API, worker, and Vite; **Docker containers keep running** (`docker compose down` to stop them).
 - **`SKIP_DOCUMENT_WORKER=1 ./scripts/dev.sh`** — skip the RQ worker if Redis/worker is not needed.

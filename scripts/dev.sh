@@ -64,7 +64,7 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-echo "==> docker compose up -d (postgres, minio, redis)"
+echo "==> docker compose up -d (postgres, minio, redis, mailpit)"
 docker compose up -d
 
 echo "==> Waiting for Postgres (pg_isready)..."
@@ -117,8 +117,15 @@ else
 fi
 
 echo "==> API http://127.0.0.1:8000 (uvicorn --reload)"
+echo "    Outbound email → Mailpit SMTP :1025 (inbox http://127.0.0.1:8025)"
 # Open registration for local dev; production should use invite-only (AUTH_ALLOW_REGISTRATION=false).
-(cd "$ROOT/backend" && AUTH_ALLOW_REGISTRATION=true exec "${PY}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000) &
+# Mailpit: org invites, login OTP, and password-reset emails are delivered locally (not only API logs).
+(cd "$ROOT/backend" && \
+  AUTH_ALLOW_REGISTRATION=true \
+  SMTP_HOST=127.0.0.1 \
+  SMTP_PORT=1025 \
+  SMTP_USE_TLS=false \
+  exec "${PY}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000) &
 PIDS+=("$!")
 
 echo "==> frontend http://127.0.0.1:5173 (vite)"

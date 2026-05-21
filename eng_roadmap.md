@@ -10,14 +10,14 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-20 (dedicated **Sites** nav tab; org/team stay on **Organizations**)  
+**Last updated:** 2026-05-21 (Mailpit dev capture; real SMTP provider wiring deferred)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
 
 | Area | What exists today |
 |------|---------------------|
-| **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**). |
+| **Compose (`docker-compose.yml`)** | Postgres (**host 15432**), MinIO (**9000** / console **9001**), Redis (**6379**), **Mailpit** SMTP (**1025**) + web inbox (**8025**). |
 | **Backend (`backend/`)** | FastAPI; Alembic **`008_anomalies`** + **`009_anomaly_review`** (`anomalies.review_status`, **`anomaly_review_events`**); ORM + **`app/services/review/`** (transitions); **`app/services/explain/`** (§4 templates). |
 | **1a** | S3-compatible storage via **boto3** (MinIO locally); `documents` registry; **`register-document`** CLI. Object key pattern `{organization_id}/{document_id}`. |
 | **1b** | Documents API + **`GET/POST /api/v1/organizations`** (dev admin). Tenant = **`X-Organization-Id`** on document routes. |
@@ -33,14 +33,14 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **3e** | **Shipped:** RQ backfill after worker upsert runs **bounded site-wide** comparison when the bill has a ``site_id``; **PATCH …/site** + **DELETE** queue site refresh (old site on move/delete); **010** index ``ix_bills_org_site_period_sort``; ``list_document_ids_newest_through_anchor`` adds immediate-older neighbor for targeted repair; keyset pages + ``SITE_BILL_REFRESH_MAX_BILLS``. |
 | **P1** | **Shipped:** auth + **Account**; migration **015**; **016** ``organization_members`` + ``organization_invites``; per-org ``org_admin``/``member``/``viewer``; team API + UI; ``POST /auth/accept-invite``; ``require_org_writer`` / ``require_org_manager``. |
 | **P1-security** | **Shipped:** Redis rate limits (IP + email buckets), login lockout, security headers middleware, ``APP_ENV=production`` startup validation. |
-| **P1-deferred** | SSO, email verify, session revoke, auth audit, TOTP, domain allowlist (see product roadmap). |
+| **P1-deferred** | SSO, email verify, session revoke, auth audit, TOTP, domain allowlist; **real SMTP** (transactional provider + verified from-address; optional Mailpit override in **`dev.sh`**) — see product roadmap. |
 | **P3** | **Shipped:** ``users.role`` admin/member; ``require_admin`` on document delete, site create, ``POST …/materialize-comparisons``; review audit ``actor_user_id`` from JWT. |
 | **4b–4d** | Template copy + confidence from ``anomalies.evidence`` — ``build_explainability_v1`` (`app/services/explain/anomaly_v1.py`); nested ``explainability`` on anomaly JSON; UI **Grounding** + **Explanation** columns. |
 | **Docs soft delete** | Migration **`007_documents_deleted_at`**; **`DELETE /api/v1/documents/{id}`**; UI **Delete**; §3e site refresh on delete. |
 | **013 / 014** | **`013`**: unique ``(organization_id, sha256)`` only when ``deleted_at IS NULL`` (re-upload after soft delete). **`014`**: ``documents.display_name`` + **`PATCH …/display-name`**. |
 | **012 platform roles** | Platform **admin** vs **member**; JWT without tenant; org list scoped by role. |
 | **Browse API** | **`GET /api/v1/documents/browse`** — paginated search for anomaly document filter (large orgs). |
-| **Dev helpers** | **`seed-dev-org`**; **`seed-dev-user`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite). |
+| **Dev helpers** | **`seed-dev-org`**; **`seed-dev-user`**; **`document-worker`**; **`scripts/dev.sh`** (API + worker + Vite; sets **SMTP → Mailpit**); **`backend/.env.example`**. |
 
 ### Not started (still Phase 1 product scope)
 
@@ -57,6 +57,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **2e** | Internal raw vs normalized viewer (admin). |
 | **4b-OPT** | LLM polish on explanation templates. |
 | **1e–1g** | Inbound email ingestion (removed from repo; revisit if product wants it). |
+| **P1-email** | **Real outbound SMTP:** provider credentials in **`backend/.env`** / deploy env (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `SMTP_FROM_EMAIL`); **`app/services/auth/email_delivery.py`** already sends when host is set; document setup in **`backend/.env.example`**; make **`scripts/dev.sh`** respect **`.env`** SMTP over Mailpit when configured. |
 | **P2** | Worker retries + idempotency hardening. |
 
 ### Possible future work (breadth / scale)
