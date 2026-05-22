@@ -35,3 +35,32 @@ class DocumentComparisonResponse(BaseModel):
     )
     compared_to_period_end: Optional[date] = None
     findings: list[ComparisonFindingResponse] = Field(default_factory=list)
+    peer_site_ids_used: list[UUID] = Field(
+        default_factory=list,
+        description="§3c: peer sites used for this run (empty = automatic discovery).",
+    )
+
+
+class PeerComparisonRequest(BaseModel):
+    """User-selected sites to compare against the anchor bill (§3c)."""
+
+    peer_site_ids: list[UUID] = Field(
+        default_factory=list,
+        description="Other sites in this org; empty = automatic peer discovery.",
+    )
+
+
+class SiteOptionResponse(BaseModel):
+    """Minimal site row for the cross-site peer picker."""
+
+    id: UUID
+    name: str
+
+
+class PeerSitesConfigResponse(BaseModel):
+    """Saved peer-site picker state + org sites list for the document viewer."""
+
+    document_id: UUID
+    anchor_site_id: Optional[UUID] = None
+    saved_peer_site_ids: list[UUID] = Field(default_factory=list)
+    available_sites: list[SiteOptionResponse] = Field(default_factory=list)

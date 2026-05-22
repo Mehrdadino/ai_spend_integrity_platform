@@ -17,6 +17,7 @@ export type UtilityType = "electricity" | "gas" | "water" | "telecom";
 
 export type ScenarioKey =
   | "normal"
+  | "cross_site_peer_rare"
   | "mom_spike"
   | "new_fee"
   | "header_mismatch"
@@ -45,12 +46,23 @@ export interface BillConfig {
   monthOffset: number;
   utility: UtilityType;
   scenario: ScenarioKey;
+  /**
+   * Embed ``BILL_SPEC_V1`` in the PDF footer so the worker can structure bills without an LLM key.
+   * Use with ``specPeriodStart`` / ``specPeriodEnd`` (ISO dates) for cross-site demos.
+   */
+  embedBillSpec?: boolean;
+  specPeriodStart?: string;
+  specPeriodEnd?: string;
+  /** Suggested upload sequence (shown in batch UI; use with ``uploadLabel`` for ZIP names). */
+  uploadOrder?: number;
+  uploadLabel?: string;
 }
 
 // ── Metadata tables ──────────────────────────────────────────────────────────
 
 export const SCENARIO_LABELS: Record<ScenarioKey, string> = {
   normal:                  "Normal bill",
+  cross_site_peer_rare:    "Cross-site rare fee (grid surcharge)",
   mom_spike:               "MoM spike +55%",
   new_fee:                 "New fee line",
   header_mismatch:         "Header ≠ line sum",
@@ -71,6 +83,7 @@ export const SCENARIO_LABELS: Record<ScenarioKey, string> = {
 /** Which comparison rule IDs each scenario is designed to trigger (comparison-v1.3). */
 export const SCENARIO_RULES: Record<ScenarioKey, string[]> = {
   normal:                  [],
+  cross_site_peer_rare:    ["peer_fee_line_rare", "new_fee_lines"],
   mom_spike:               ["mom_total_change"],
   new_fee:                 ["new_fee_lines"],
   header_mismatch:         ["header_total_mismatch"],
@@ -100,6 +113,7 @@ export const SCENARIO_RULES: Record<ScenarioKey, string[]> = {
 
 export const SCENARIO_SEVERITY: Record<ScenarioKey, "none" | "info" | "warning" | "critical"> = {
   normal:                  "none",
+  cross_site_peer_rare:    "warning",
   mom_spike:               "critical",
   new_fee:                 "warning",
   header_mismatch:         "warning",
@@ -141,6 +155,115 @@ export interface PresetDef {
 }
 
 export const PRESETS: PresetDef[] = [
+  {
+    id: "cross_site_core",
+    label: "Cross-Site Comparison (3 PDFs)",
+    description:
+      "§3c demo: upload in batch order — (1) Site B March, (2) Site A February, (3) Site A March rare fee last. " +
+      "Creates Sites A+B only → insufficient peers until you add the 5-PDF preset or Sites C+D. " +
+      "Includes BILL_SPEC_V1 (no LLM key required). Then Anomalies → Refresh.",
+    count: 3,
+    bills: [
+      {
+        siteName: "Cross-Site Site B",
+        monthOffset: -2,
+        utility: "electricity",
+        scenario: "normal",
+        embedBillSpec: true,
+        specPeriodStart: "2026-03-01",
+        specPeriodEnd: "2026-03-31",
+        uploadOrder: 1,
+        uploadLabel: "01-upload-first-site-b-mar-normal.pdf",
+      },
+      {
+        siteName: "Cross-Site Site A",
+        monthOffset: -3,
+        utility: "electricity",
+        scenario: "normal",
+        embedBillSpec: true,
+        specPeriodStart: "2026-02-01",
+        specPeriodEnd: "2026-02-28",
+        uploadOrder: 2,
+        uploadLabel: "02-upload-second-site-a-feb-normal.pdf",
+      },
+      {
+        siteName: "Cross-Site Site A",
+        monthOffset: -2,
+        utility: "electricity",
+        scenario: "cross_site_peer_rare",
+        embedBillSpec: true,
+        specPeriodStart: "2026-03-01",
+        specPeriodEnd: "2026-03-31",
+        uploadOrder: 3,
+        uploadLabel: "03-upload-last-site-a-mar-rare-fee.pdf",
+      },
+    ],
+  },
+  {
+    id: "cross_site_full",
+    label: "Cross-Site Comparison (5 PDFs)",
+    description:
+      "Full §3c peer signal: core 3-bill upload order plus Site C and Site D March baselines. " +
+      "After upload, assign each PDF to its named site and run Anomalies → Refresh.",
+    count: 5,
+    bills: [
+      {
+        siteName: "Cross-Site Site B",
+        monthOffset: -2,
+        utility: "electricity",
+        scenario: "normal",
+        embedBillSpec: true,
+        specPeriodStart: "2026-03-01",
+        specPeriodEnd: "2026-03-31",
+        uploadOrder: 1,
+        uploadLabel: "01-upload-first-site-b-mar-normal.pdf",
+      },
+      {
+        siteName: "Cross-Site Site A",
+        monthOffset: -3,
+        utility: "electricity",
+        scenario: "normal",
+        embedBillSpec: true,
+        specPeriodStart: "2026-02-01",
+        specPeriodEnd: "2026-02-28",
+        uploadOrder: 2,
+        uploadLabel: "02-upload-second-site-a-feb-normal.pdf",
+      },
+      {
+        siteName: "Cross-Site Site A",
+        monthOffset: -2,
+        utility: "electricity",
+        scenario: "cross_site_peer_rare",
+        embedBillSpec: true,
+        specPeriodStart: "2026-03-01",
+        specPeriodEnd: "2026-03-31",
+        uploadOrder: 3,
+        uploadLabel: "03-upload-last-site-a-mar-rare-fee.pdf",
+      },
+      {
+        siteName: "Cross-Site Site C",
+        monthOffset: -2,
+        utility: "electricity",
+        scenario: "normal",
+        embedBillSpec: true,
+        specPeriodStart: "2026-03-01",
+        specPeriodEnd: "2026-03-31",
+        uploadOrder: 4,
+        uploadLabel: "04-optional-site-c-mar-normal.pdf",
+      },
+      {
+        siteName: "Cross-Site Site D",
+        monthOffset: -2,
+        utility: "electricity",
+        scenario: "normal",
+        embedBillSpec: true,
+        specPeriodStart: "2026-03-01",
+        specPeriodEnd: "2026-03-31",
+        uploadOrder: 5,
+        uploadLabel: "05-optional-site-d-mar-normal.pdf",
+      },
+    ],
+  },
   {
     id: "mom_pair",
     label: "MoM Spike Pair",
@@ -252,6 +375,8 @@ interface BillData {
   currency: string;
   /** When true, render almost no embedded text (triggers sparse-text / OCR path). */
   sparseTextOnly: boolean;
+  /** Machine-readable spec lines rendered in the footer (``BILL_SPEC_V1``). */
+  billSpecLines?: string[];
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
@@ -314,6 +439,63 @@ function sum(items: LineItem[]): number {
   return parseFloat(items.reduce((s, l) => s + l.amount, 0).toFixed(2));
 }
 
+/** Extra spec tokens per line label for cross-site / no-LLM structuring. */
+function lineSpecExtras(label: string, detail: string): string {
+  const lower = label.toLowerCase();
+  if (lower.includes("energy usage") || detail.toLowerCase().includes("kwh")) {
+    const m = detail.match(/([\d,]+)\s*kwh/i);
+    const qty = m ? m[1].replace(/,/g, "") : "820";
+    return `qty=${qty} | unit=kwh`;
+  }
+  if (lower.includes("surcharge") || lower.includes("late payment")) {
+    return "kind=fee";
+  }
+  return "";
+}
+
+function buildBillSpecLines(cfg: BillConfig, data: BillData): string[] {
+  const ps = cfg.specPeriodStart ?? data.periodStart;
+  const pe = cfg.specPeriodEnd ?? data.periodEnd;
+  const domain = cfg.utility === "telecom" ? "telecom" : "utility";
+  const kind =
+    cfg.utility === "electricity" ? "electricity" :
+    cfg.utility === "gas"         ? "gas" :
+    cfg.utility === "water"       ? "water" :
+    "telecom";
+  const rows: string[] = [
+    "BILL_SPEC_V1",
+    `spend_domain: ${domain}`,
+    `spend_kind: ${kind}`,
+    `issuer_name: ${data.companyName}`,
+  ];
+  if (ps) rows.push(`period_start: ${toIsoPeriodDate(ps)}`);
+  if (pe) rows.push(`period_end: ${toIsoPeriodDate(pe)}`);
+  rows.push("currency: USD");
+  for (const item of data.lineItems) {
+    const extras = lineSpecExtras(item.label, item.detail);
+    rows.push(`line: ${item.label} | ${item.amount.toFixed(2)}${extras ? ` | ${extras}` : ""}`);
+  }
+  rows.push(`header_total: ${data.headerTotal.toFixed(2)}`);
+  rows.push("END_BILL_SPEC");
+  return rows;
+}
+
+/** Coerce display dates or pass through ISO ``YYYY-MM-DD``. */
+function toIsoPeriodDate(displayOrIso: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(displayOrIso.trim())) {
+    return displayOrIso.trim();
+  }
+  const m = displayOrIso.match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
+  if (!m) return displayOrIso;
+  const months: Record<string, string> = {
+    Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+    Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12",
+  };
+  const mo = months[m[1]] ?? "01";
+  const day = String(m[2]).padStart(2, "0");
+  return `${m[3]}-${mo}-${day}`;
+}
+
 function buildBillData(cfg: BillConfig): BillData {
   const dates = billDates(cfg.monthOffset);
   let periodStart: string | null = dates.periodStart;
@@ -355,6 +537,18 @@ function buildBillData(cfg: BillConfig): BillData {
           { label: "Sales tax",            detail: "5.5%",                        amount:   3.60 },
         ];
       }
+      headerTotal = sum(items);
+      break;
+
+    // ── Cross-site: rare grid surcharge on anchor site (§3c peer_fee_line_rare) ──
+    case "cross_site_peer_rare":
+      items = [
+        { label: "Basic service charge", detail: "",                            amount:  12.50 },
+        { label: "Energy usage",          detail: "820 kWh @ $0.1200/kWh",     amount:  98.40 },
+        { label: "Grid modernization surcharge", detail: "Portfolio grid rider", amount: 15.00 },
+        { label: "Environmental levy",    detail: "",                            amount:   4.10 },
+        { label: "State tax",             detail: "5.5% of charges",            amount:   7.15 },
+      ];
       headerTotal = sum(items);
       break;
 
@@ -756,7 +950,7 @@ function buildBillData(cfg: BillConfig): BillData {
       headerTotal = 0;
   }
 
-  return {
+  const data: BillData = {
     companyName:   COMPANY[cfg.utility],
     tagline:       TAGLINE[cfg.utility],
     serviceAddress: `${cfg.siteName}, Portland, OR 97201`,
@@ -770,6 +964,10 @@ function buildBillData(cfg: BillConfig): BillData {
     currency:      "USD",
     sparseTextOnly,
   };
+  if (cfg.embedBillSpec) {
+    data.billSpecLines = buildBillSpecLines(cfg, data);
+  }
+  return data;
 }
 
 // ── PDF binary construction ───────────────────────────────────────────────────
@@ -911,6 +1109,15 @@ function buildPageStream(data: BillData): string {
   txt(50, 70, "Payment due within 30 days of issue date. Mail check to P.O. Box 44100, Portland OR 97204.");
   txt(50, 56, `Currency: ${data.currency}  |  This is a computer-generated statement. No signature required.`);
 
+  if (data.billSpecLines && data.billSpecLines.length > 0) {
+    let specY = 42;
+    font(2, 6.5, 0.45, 0.45, 0.45);
+    for (const line of data.billSpecLines) {
+      txt(50, specY, line);
+      specY -= 9;
+    }
+  }
+
   cmds.push("ET");
   return cmds.join("\n");
 }
@@ -964,6 +1171,9 @@ export function generateBillPdf(cfg: BillConfig): Blob {
 
 /** Stable, filesystem-safe filename for a generated bill. */
 export function getFilename(cfg: BillConfig): string {
+  if (cfg.uploadLabel) {
+    return cfg.uploadLabel;
+  }
   const site = cfg.siteName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

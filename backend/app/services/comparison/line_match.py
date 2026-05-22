@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from app.models.bill_line_item import BillLineItem
+from app.services.normalization.service_keys import SERVICE_UNKNOWN
 
 _WS_RE = re.compile(r"\s+")
 
@@ -22,7 +23,12 @@ def normalize_match_label(raw: str) -> str:
 
 def line_fingerprint(line: BillLineItem) -> str:
     """Stable key for ``canonical_line_kind`` + service/label within one site history."""
-    label_key = line.canonical_service_key or normalize_match_label(line.raw_label)
+    svc = line.canonical_service_key
+    # ``SERVICE_UNKNOWN`` is a real string — do not treat it as a usable match key.
+    if not svc or svc == SERVICE_UNKNOWN:
+        label_key = normalize_match_label(line.raw_label)
+    else:
+        label_key = svc
     return f"{line.canonical_line_kind}|{label_key}"
 
 

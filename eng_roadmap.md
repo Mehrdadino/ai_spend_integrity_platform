@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-21 (invite activation flow; Mailpit dev capture; real SMTP deferred)  
+**Last updated:** 2026-05-21 (§3c cross-site peer rule pack)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -31,6 +31,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **3b** | Rule pack **v1.3** (`comparison-v1.3`): `rule_pack_v1.py`, `single_bill_integrity.py`, `extraction_quality.py`, `domain_packs.py` (MoM, new fees — **only when both current and prior have `period_start`/`period_end`**; else `period_comparison_skipped`; header mismatch, duplicate lines, fee/tax share, penalty fees, period/credit, extraction provenance, utility/telecom packs); labeled harness ``tests/comparison_labeled_cases.py``; **`GET …/bill/comparison`**; UI **Comparison insights**. |
 | **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`** (+ **`GET …/anomalies/{id}`** §4d); replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab. New anomalies default **`review_status=open`** (**009**). |
 | **3e** | **Shipped:** RQ backfill after worker upsert runs **bounded site-wide** comparison when the bill has a ``site_id``; **PATCH …/site** + **DELETE** queue site refresh (old site on move/delete); **010** index ``ix_bills_org_site_period_sort``; ``list_document_ids_newest_through_anchor`` adds immediate-older neighbor for targeted repair; keyset pages + ``SITE_BILL_REFRESH_MAX_BILLS``. |
+| **3c** | **Shipped:** ``comparison-peer-v1`` — ``peer_pack_v1.py``, ``evaluate_peer.py``, ``list_peer_bill_candidates_for_anchor``; three peer rules + ``not_comparable_*`` gates; batch via ``materialize_comparisons`` (not worker hot path); §3d persists separate pack family from ``comparison-v1.3``; ``tests/test_peer_pack_v1.py``. |
 | **P1** | **Shipped:** auth + **Account**; migration **015**; **016** ``organization_members`` + ``organization_invites``; per-org ``org_admin``/``member``/``viewer``; ``GET /organizations/{id}/team`` roster (all members); invite **activation** + ``LoginPage``; org-admin invite/role controls; ``require_org_writer`` / ``require_org_manager``. |
 | **P1-security** | **Shipped:** Redis rate limits (IP + email buckets), login lockout, security headers middleware, ``APP_ENV=production`` startup validation. |
 | **P1-deferred** | SSO, email verify, session revoke, auth audit, TOTP, domain allowlist; **real SMTP** (transactional provider + verified from-address; optional Mailpit override in **`dev.sh`**) — see product roadmap. |
@@ -44,7 +45,6 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ### Not started (still Phase 1 product scope)
 
-- **§3c:** site-to-site comparables (see **Possible future work** below).
 - **Cross-cutting P2, P4–P5:** retries/idempotency, observability, E2E smoke.
 
 ### Deferred / optional (see also `product_roadmap.md`)
@@ -62,17 +62,14 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ### Possible future work (breadth / scale)
 
-These are **not** in the current sprint; **§3c** stays out of repo until product asks for cross-site rules.
-
 | ID | Item |
 |----|------|
-| **§3c** | Site-to-site comparables — **not started**. Product spec: [`product_roadmap.md`](product_roadmap.md) § “Cross-site comparison (§3c)”. Peer-benchmark rules only; **not** all-bills × all-sites on upload. |
+| **§3c-OPT** | Org flag to run peer pack on worker backfill; user-defined peer groups (site metadata). |
 
 ### Suggested “resume here” order
 
 1. **Real-bill pilot** — LLM extraction on production PDFs; expand labeled golden cases from pilot labels.  
-2. **§3c** — site-to-site comparables when a pilot needs cross-location views.  
-3. **P2 + P4–P5** — retries/idempotency, observability, E2E smoke.
+2. **P2 + P4–P5** — retries/idempotency, observability, E2E smoke.
 
 ---
 
@@ -133,7 +130,7 @@ Each **product milestone** below is split into **independent engineering steps**
 |------|------------|-----------------|
 | **3a — “Prior bill for site + period” queries** | Repository functions / SQL; define “period” and ordering rules. | No anomaly rows yet; used by tests and **3b**. |
 | **3b — Rule pack v1 (code-first)** | MoM deltas, new fee lines, simple thresholds; deterministic outputs + evidence structs. | Table-driven rules file is fine; no LLM. |
-| **3c — Site-to-site comparables** | Peer pack `comparison-peer-v1` per [`product_roadmap.md`](product_roadmap.md): gated peer set (org + domain + service + period + min peers), three rules (`peer_fee_line_rare`, `peer_fee_line_widespread`, `peer_usage_or_total_outlier`), explicit `not_comparable_*`. Optional materialize/schedule — **not** default worker path. | Ship after **3b** + pilot ask; separate rule pack version from `comparison-v1.3`. |
+| **3c — Site-to-site comparables** | **Shipped:** `comparison-peer-v1` in `peer_pack_v1.py` + `evaluate_peer.py`; gated peers via `list_peer_bill_candidates_for_anchor`; batch on `POST …/materialize-comparisons` only (not worker backfill). | Separate §3d pack family from `comparison-v1.3`; tests `test_peer_pack_v1.py`. |
 | **3d — `anomalies` persistence** | **Shipped:** `anomalies` + partial unique indexes; ``GET /api/v1/anomalies``; upsert on ``GET …/bill/comparison`` (delete+insert per ``bill_id`` + ``rule_pack_version``); fee rules expand to per-line rows with ``bill_line_item_id``. | Explainability (**4**) reads these rows + stored metrics. |
 | **3e — Re-run / backfill job** | **Shipped:** RQ backfill after worker upsert = bounded site-wide refresh per bill site; site PATCH + soft-delete refresh neighbors (old site on move); mid-timeline prior shifts covered automatically. | Without Redis, user must still call ``GET …/bill/comparison`` or **Anomalies Refresh** to populate ``anomalies``. |
 

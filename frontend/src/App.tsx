@@ -38,6 +38,7 @@ import {
 } from "./lib/organizations";
 import { getSelectableTableRowProps } from "./lib/tableRowActivation";
 import { createSite, fetchSitesList, type SiteResponse } from "./lib/sites";
+import { CrossSitePeerPanel } from "./components/CrossSitePeerPanel";
 import {
   MAX_UPLOAD_BATCH_SIZE,
   deleteDocument,
@@ -45,12 +46,14 @@ import {
   fetchAnomalyReviewEvents,
   fetchDocumentBill,
   fetchDocumentComparison,
+  fetchDocumentPeerSitesConfig,
   fetchDocumentPriorBills,
   fetchDocumentViewer,
   fetchDocumentsList,
   patchDocumentDisplayName,
   patchDocumentSite,
   postAnomalyReview,
+  postDocumentPeerComparison,
   postMaterializeAnomalyComparisons,
   reprocessDocument,
   UNSUPPORTED_REPROCESS_MAY_HELP_CODES,
@@ -63,6 +66,7 @@ import {
   type DocumentComparisonResponse,
   type DocumentPriorBillsResponse,
   type DocumentViewerResponse,
+  type PeerSitesConfigResponse,
 } from "./lib/upload";
 import {
   batchSummary,
@@ -518,6 +522,15 @@ function documentRowLabel(row: { display_name: string | null; document_id: strin
   return anomalyDocumentLabel(row);
 }
 
+/** Resolve ``site_id`` to a display name for document list tables. */
+function siteNameForDocument(siteId: string | null, sites: SiteResponse[]): string {
+  if (!siteId) {
+    return "—";
+  }
+  const match = sites.find((s) => s.id === siteId);
+  return match?.name ?? siteId;
+}
+
 const ANOMALY_TABLE_COL_COUNT = 9;
 
 /** Anomalies grouped under each bill/document so org-wide inbox maps clearly to uploads. */
@@ -745,6 +758,15 @@ function DocumentViewerPanel({
   comparison,
   comparisonLoading,
   comparisonError,
+  peerSitesConfig,
+  peerSitesConfigLoading,
+  peerSitesConfigError,
+  selectedPeerSiteIds,
+  onSelectedPeerSiteIdsChange,
+  peerComparison,
+  peerComparisonLoading,
+  peerComparisonError,
+  onRunPeerComparison,
   onViewSignals,
 }: {
   headerDocumentId: string | null;
@@ -787,6 +809,15 @@ function DocumentViewerPanel({
   comparison?: DocumentComparisonResponse | null;
   comparisonLoading?: boolean;
   comparisonError?: string | null;
+  peerSitesConfig?: PeerSitesConfigResponse | null;
+  peerSitesConfigLoading?: boolean;
+  peerSitesConfigError?: string | null;
+  selectedPeerSiteIds?: string[];
+  onSelectedPeerSiteIdsChange?: (ids: string[]) => void;
+  peerComparison?: DocumentComparisonResponse | null;
+  peerComparisonLoading?: boolean;
+  peerComparisonError?: string | null;
+  onRunPeerComparison?: (useAutoPeers: boolean) => void;
   /** Jump to Anomalies tab filtered to this document. */
   onViewSignals?: () => void;
 }) {
@@ -1204,6 +1235,21 @@ function DocumentViewerPanel({
               ) : null}
             </div>
           ) : null}
+          {bill && onRunPeerComparison ? (
+            <CrossSitePeerPanel
+              config={peerSitesConfig ?? null}
+              configLoading={peerSitesConfigLoading ?? false}
+              configError={peerSitesConfigError ?? null}
+              selectedSiteIds={selectedPeerSiteIds ?? []}
+              onSelectedSiteIdsChange={onSelectedPeerSiteIdsChange ?? (() => {})}
+              peerComparison={peerComparison}
+              peerLoading={peerComparisonLoading ?? false}
+              peerError={peerComparisonError ?? null}
+              onRun={onRunPeerComparison}
+              onViewSignals={onViewSignals}
+              disabled={pipelineOverlayBusy}
+            />
+          ) : null}
           {priorBillsLoading || priorBillsError || priorBills !== undefined ? (
             <div className="prior-bills-section">
               <h4 className="prior-bills-title">Prior bills (same site)</h4>
@@ -1325,6 +1371,15 @@ export function App() {
   const [comparison, setComparison] = useState<DocumentComparisonResponse | null | undefined>(undefined);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [peerSitesConfig, setPeerSitesConfig] = useState<PeerSitesConfigResponse | null>(null);
+  const [peerSitesConfigLoading, setPeerSitesConfigLoading] = useState(false);
+  const [peerSitesConfigError, setPeerSitesConfigError] = useState<string | null>(null);
+  const [selectedPeerSiteIds, setSelectedPeerSiteIds] = useState<string[]>([]);
+  const [peerComparison, setPeerComparison] = useState<DocumentComparisonResponse | null | undefined>(
+    undefined,
+  );
+  const [peerComparisonLoading, setPeerComparisonLoading] = useState(false);
+  const [peerComparisonError, setPeerComparisonError] = useState<string | null>(null);
   const [anomalyRows, setAnomalyRows] = useState<AnomalyResponse[]>([]);
   const [anomalyListLoading, setAnomalyListLoading] = useState(false);
   const [anomalyListError, setAnomalyListError] = useState<string | null>(null);
@@ -1695,6 +1750,79 @@ export function App() {
     documentViewer?.processing_status,
     documentBill?.id,
   ]);
+
+  useEffect(() => {
+    if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
+      setPeerSitesConfig(null);
+      setSelectedPeerSiteIds([]);
+      return;
+    }
+    const siteId = documentViewer?.site_id ?? documentBill?.site_id;
+    if (!siteId || !documentBill || documentViewer?.processing_status !== "extracted") {
+      setPeerSitesConfig(null);
+      return;
+    }
+    let cancelled = false;
+    setPeerSitesConfigLoading(true);
+    setPeerSitesConfigError(null);
+    void fetchDocumentPeerSitesConfig(apiBase.trim(), effectiveOrgId, selectedDocId)
+      .then((cfg) => {
+        if (!cancelled) {
+          setPeerSitesConfig(cfg);
+          setSelectedPeerSiteIds(cfg.saved_peer_site_ids ?? []);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setPeerSitesConfigError(e instanceof Error ? e.message : String(e));
+          setPeerSitesConfig(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPeerSitesConfigLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedDocId,
+    orgId,
+    apiBase,
+    documentViewer?.site_id,
+    documentViewer?.processing_status,
+    documentBill?.id,
+  ]);
+
+  const handleRunPeerComparison = useCallback(
+    async (useAutoPeers: boolean) => {
+      if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
+        return;
+      }
+      setPeerComparisonLoading(true);
+      setPeerComparisonError(null);
+      try {
+        const ids = useAutoPeers ? [] : selectedPeerSiteIds;
+        const res = await postDocumentPeerComparison(
+          apiBase.trim(),
+          effectiveOrgId,
+          selectedDocId,
+          ids,
+        );
+        setPeerComparison(res);
+        if (!useAutoPeers) {
+          setSelectedPeerSiteIds(ids);
+        }
+      } catch (e) {
+        setPeerComparisonError(e instanceof Error ? e.message : String(e));
+        setPeerComparison(undefined);
+      } finally {
+        setPeerComparisonLoading(false);
+      }
+    },
+    [selectedDocId, orgId, apiBase, selectedPeerSiteIds],
+  );
 
   const handleApplySiteToDocument = useCallback(async () => {
     if (!selectedDocId || !effectiveOrgId || !apiBase.trim()) {
@@ -2301,6 +2429,15 @@ export function App() {
     comparison,
     comparisonLoading,
     comparisonError,
+    peerSitesConfig,
+    peerSitesConfigLoading,
+    peerSitesConfigError,
+    selectedPeerSiteIds,
+    onSelectedPeerSiteIdsChange: setSelectedPeerSiteIds,
+    peerComparison,
+    peerComparisonLoading,
+    peerComparisonError,
+    onRunPeerComparison: handleRunPeerComparison,
     onViewSignals:
       documentViewer?.document_id != null
         ? () =>
@@ -2854,6 +2991,7 @@ export function App() {
                   <thead>
                     <tr>
                       <th>Name</th>
+                      <th>Site</th>
                       <th>Created</th>
                       <th>Status</th>
                       <th>Review</th>
@@ -2876,6 +3014,9 @@ export function App() {
                         })}
                       >
                         <td className="doc-table__name">{row.display_name?.trim() || "—"}</td>
+                        <td className="doc-table__site" title={row.site_id ?? undefined}>
+                          {siteNameForDocument(row.site_id, siteRows)}
+                        </td>
                         <td>{new Date(row.created_at).toLocaleString()}</td>
                         <td>
                           <span className={statusPillClass(row.processing_status)}>{row.processing_status}</span>

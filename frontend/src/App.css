@@ -886,6 +886,13 @@ button.btn-danger:hover:not(:disabled) {
   font-weight: 600;
 }
 
+.doc-table__site {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .doc-table__link-btn {
   margin: 0;
   padding: 0.25rem 0.6rem;
@@ -1306,6 +1313,58 @@ button.btn-danger:hover:not(:disabled) {
   line-height: 1.5;
   color: var(--muted);
   max-width: 42rem;
+}
+
+.peer-sites-section {
+  margin-top: 1rem;
+}
+
+.peer-sites-search {
+  margin-bottom: 0.65rem;
+}
+
+.peer-sites-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.peer-sites-count {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.peer-sites-list {
+  list-style: none;
+  margin: 0 0 0.85rem;
+  padding: 0.5rem 0.65rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.peer-sites-list__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.15rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.peer-sites-list__item input {
+  flex-shrink: 0;
+}
+
+.peer-sites-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .comparison-findings {

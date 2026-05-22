@@ -81,9 +81,10 @@ def post_materialize_comparisons(
         description="Max documents to run comparison on.",
     ),
 ) -> MaterializeComparisonsResponse:
-    """Run §3b comparison for every extracted document with a bill (inbox **Refresh** path).
+    """Run §3b + §3c comparison for every extracted document with a bill (inbox **Refresh** path).
 
-    Same persistence as ``GET …/documents/{id}/bill/comparison`` per document; no viewer required.
+    Same-site rules match ``GET …/documents/{id}/bill/comparison``; cross-site peer pack
+    (``comparison-peer-v1``) runs in the same batch (not on the default worker hot path).
     """
     ok, failed = materialize_comparisons_for_organization(
         db,

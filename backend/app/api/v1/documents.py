@@ -30,8 +30,16 @@ from app.repositories.documents import (
     update_document_display_name_for_organization,
 )
 from app.schemas.bills import BillResponse, DocumentBillResponse, DocumentPriorBillsResponse
-from app.schemas.comparison import DocumentComparisonResponse
+from app.schemas.comparison import (
+    DocumentComparisonResponse,
+    PeerComparisonRequest,
+    PeerSitesConfigResponse,
+    SiteOptionResponse,
+)
 from app.services.comparison.evaluate import evaluate_document_comparison
+from app.services.comparison.evaluate_peer import evaluate_document_peer_comparison
+from app.services.comparison.peer_sites import read_saved_peer_site_ids
+from app.repositories.sites import list_sites_for_organization
 from app.services.comparison.period import BILL_ORDERING_NOTE
 from app.services.document_site import DocumentSiteAssignmentError, assign_site_to_document
 from app.schemas.documents import (
@@ -340,6 +348,58 @@ def get_document_bill_comparison(
         organization_id=ctx.organization.id,
         document_id=document_id,
     )
+
+
+@router.get("/{document_id}/bill/peer-sites", response_model=PeerSitesConfigResponse)
+def get_document_peer_sites_config(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    ctx: AuthContext = Depends(require_auth_context),
+) -> PeerSitesConfigResponse:
+    """Return org sites and last saved peer-site picks for §3c (document viewer picker)."""
+    doc = get_document_for_organization(
+        db, document_id=document_id, organization_id=ctx.organization.id
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    bill = get_bill_for_org_document(
+        db, organization_id=ctx.organization.id, document_id=document_id
+    )
+    site_rows = list_sites_for_organization(db, organization_id=ctx.organization.id, limit=500)
+    return PeerSitesConfigResponse(
+        document_id=document_id,
+        anchor_site_id=doc.site_id,
+        saved_peer_site_ids=read_saved_peer_site_ids(bill),
+        available_sites=[SiteOptionResponse(id=s.id, name=s.name) for s in site_rows],
+    )
+
+
+@router.post("/{document_id}/bill/peer-comparison", response_model=DocumentComparisonResponse)
+def post_document_peer_comparison(
+    document_id: UUID,
+    body: PeerComparisonRequest,
+    db: Session = Depends(get_db),
+    ctx: AuthContext = Depends(require_org_writer),
+) -> DocumentComparisonResponse:
+    """Run §3c peer pack for user-selected sites (or auto-discovery when ``peer_site_ids`` is empty)."""
+    doc = get_document_for_organization(
+        db, document_id=document_id, organization_id=ctx.organization.id
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.site_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Assign a site to this document before cross-site comparison.",
+        )
+    result = evaluate_document_peer_comparison(
+        db,
+        organization_id=ctx.organization.id,
+        document_id=document_id,
+        peer_site_ids=body.peer_site_ids,
+    )
+    db.commit()
+    return result
 
 
 @router.get("/{document_id}/bill/prior-bills", response_model=DocumentPriorBillsResponse)

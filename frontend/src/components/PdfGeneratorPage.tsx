@@ -89,7 +89,10 @@ export function PdfGeneratorPage() {
     // Revoke previous blob URLs
     generatedRef.current.forEach(item => URL.revokeObjectURL(item.blobUrl));
 
-    const items: GeneratedItem[] = batch.map(cfg => {
+    const ordered = [...batch].sort(
+      (a, b) => (a.uploadOrder ?? 999) - (b.uploadOrder ?? 999),
+    );
+    const items: GeneratedItem[] = ordered.map(cfg => {
       const blob    = generateBillPdf(cfg);
       const blobUrl = URL.createObjectURL(blob);
       return { config: cfg, blob, blobUrl, filename: getFilename(cfg) };
@@ -252,14 +255,25 @@ export function PdfGeneratorPage() {
             </div>
           </div>
           <p className="doc-list-lede">
-            Table order is for readability only. Assign each PDF to the matching site; upload order
-            does not matter when billing period dates are extracted from the bill.
+            {batch.some(b => b.uploadOrder != null) ? (
+              <>
+                <strong>Upload order matters</strong> for cross-site presets: upload rows in the
+                order shown (or use numbered ZIP filenames), assign each PDF to its site label, then
+                run <strong>Anomalies → Refresh</strong>.
+              </>
+            ) : (
+              <>
+                Assign each PDF to the matching site. For MoM/new-fee rules, billing period dates on
+                the PDF determine history (upload order is less important).
+              </>
+            )}
           </p>
           <div className="table-wrap">
             <table className="doc-table">
               <thead>
                 <tr>
                   <th>#</th>
+                  {batch.some(b => b.uploadOrder != null) && <th>Upload</th>}
                   <th>Site label</th>
                   <th>Billing month</th>
                   <th>Utility</th>
@@ -272,6 +286,9 @@ export function PdfGeneratorPage() {
                 {batch.map((cfg, i) => (
                   <tr key={cfg.id}>
                     <td className="cell-mono">{i + 1}</td>
+                    {batch.some(b => b.uploadOrder != null) && (
+                      <td className="cell-mono">{cfg.uploadOrder ?? "—"}</td>
+                    )}
                     <td style={{ fontWeight: 600 }}>{cfg.siteName}</td>
                     <td>{MONTH_OFFSETS.find(o => o.value === cfg.monthOffset)?.label ?? cfg.monthOffset}</td>
                     <td>{cfg.utility.charAt(0).toUpperCase() + cfg.utility.slice(1)}</td>

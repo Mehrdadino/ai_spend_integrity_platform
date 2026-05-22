@@ -20,7 +20,7 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-21 (invite activation)
+## Implementation status (repository) — 2026-05-21 (§3c cross-site comparison)
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
@@ -37,6 +37,7 @@ Just:
 - **Production hardening:** Redis **rate limits** (e.g. **3/15min** per email on forgot/register/invite, **5/15min** login, **10/min** per IP); **lockout** after **5** failed sign-ins; security headers; production startup validation.
 - **§3a prior bills:** `get_prior_bills_for_bill` + **`GET …/bill/prior-bills`** (same org, same `site_id`; period ordering); prior-bill table in document viewer.
 - **§3b + §3d + §4:** **`GET …/bill/comparison`** persists anomalies; rule pack **`comparison-v1.3`** — **single-bill integrity** on every bill (no prior): header vs lines, duplicate lines, high fee/tax share, penalty fees, **missing period dates** (warning), credits vs charges, **extraction-quality** signals from ``bills.summary``, **utility/telecom domain packs** (electric demand without kWh, water/gas missing usage, telecom fee clusters); with history: MoM total and new fee lines **only when both bills have confirmed billing periods** (otherwise **`period_comparison_skipped`** — upload order is not used as a month proxy); **labeled golden cases** in ``backend/tests/comparison_labeled_cases.py`` for rule recall regression; **`GET /api/v1/anomalies`** (+ detail) with **template explanations** and **grounding**; **`POST …/materialize-comparisons`** for inbox **Refresh**.
+- **§3c cross-site peers:** rule pack **`comparison-peer-v1`** — auto peer set or **user-chosen sites** in the document viewer (searchable checklist; ``GET/POST …/bill/peer-sites`` + ``…/peer-comparison``); saved picks on ``bills.summary.peer_comparison_site_ids``; batch **Refresh** still uses auto-discovery only.
 - **§3e comparison backfill:** After worker upsert, **bounded site-wide** comparison when the bill has a `site_id` (correct priors after mid-timeline insert/delete). **Site change** refreshes the new site (via backfill) and the **previous** site when the bill moved. **Soft delete** triggers site-wide refresh. Keyset walk; cap `SITE_BILL_REFRESH_MAX_BILLS` (default 10,000).
 - **§5 review workflow:** `review_status` + **`anomaly_review_events`**; **`POST …/anomalies/{id}/review`**; inbox **Review status** filter; per-row **Actions** (approve / dismiss / flag / reopen) with **§5e notes** and **History**.
 - **Anomalies inbox UX:** signals **grouped by bill/document**; optional **display name** on list/API; **Filter by bill** — searchable, paginated **`GET /documents/browse`**; **View bill** on group; row click opens document (text can be highlighted without navigating). **Documents** tab **Signals** link and viewer **View in signals inbox** jump to filtered Anomalies.
@@ -47,27 +48,25 @@ Just:
 
 - **Auth / org (deferred):** SSO (OIDC/SAML), email verification on signup/change-email, revoke-all-sessions, auth audit log, TOTP app 2FA, per-org domain allowlist, seat billing.
 - **Real outbound email (deferred):** Today local dev uses **Mailpit** only (invites/OTP/reset appear at **:8025**, not Gmail). Later: wire a transactional provider (**Resend**, **SendGrid**, **SES**, etc.) via existing **`SMTP_*`** env vars so org invites and auth mail reach real inboxes; verify **`SMTP_FROM_EMAIL`**; optional **`dev.sh`** toggle so Mailpit stays default but **`.env`** can override for one-off real-inbox tests (no separate prod deploy required). Invite **activation UI** is shipped; delivery to real inboxes still depends on this SMTP work.
-- **§3c** site-to-site comparables (cross-location; not started).
 - **Real-bill pilot** — production LLM structuring quality on real PDFs; extend labeled golden set from pilot disputes.
 - **P2** — worker retries and upload idempotency hardening.
 
 ### Recommended next focus (product ↔ eng)
 
 - **Real-bill pilot** — `EXTRACTION_LLM_API_KEY`, validate normalization on real utility PDFs; grow labeled set from pilot PDFs.
-- **§3c** — site-to-site comparables when a pilot needs cross-location views.
 - **P2** — worker retries + idempotency.
 - **Comparison chain by utility type** — optional split of priors by `spend_domain` / service (today: one chain per site only).
 
 ### Possible future work (comparison breadth)
 
-- **§3c — site-to-site comparables** — product spec below (peers + three starter rules). **Not started** in code (see [`eng_roadmap.md`](eng_roadmap.md) §0.0).
+- **§3c tuning** — org setting to enable peer pack on worker path; user-defined peer groups (site metadata).
 - **Prior chain by bill type** — e.g. Seattle electric vs Seattle water on the same site as separate comparison chains (workaround today: separate sites).
 
 ---
 
 ## Cross-site comparison (§3c) — product spec (draft)
 
-**Status:** Not implemented. Same-site MoM / new-fee (**§3b**, per `site_id`) remains the default on every bill.
+**Status:** **Shipped** (rule pack ``comparison-peer-v1``). Same-site MoM / new-fee (**§3b**, per `site_id`) remains the default on every bill and on worker backfill; peer rules run on **`POST …/materialize-comparisons`** batch refresh.
 
 ### Why this exists (business)
 

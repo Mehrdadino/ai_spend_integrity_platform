@@ -128,6 +128,45 @@ class TestPersistAnomaliesReviewPreserve(unittest.TestCase):
         self.assertEqual(added.rule_pack_version, RULE_PACK_VERSION)
         self.assertEqual(added.fingerprint, fp)
 
+    def test_replace_keeps_other_pack_family(self) -> None:
+        """§3c peer rows must survive a §3b site-pack rerun."""
+        bill = _bill()
+        peer_row = Anomaly(
+            id=uuid.uuid4(),
+            organization_id=bill.organization_id,
+            site_id=bill.site_id,
+            document_id=bill.document_id,
+            bill_id=bill.id,
+            rule_pack_version="comparison-peer-v1",
+            rule_id="peer_fee_line_rare",
+            period_end=date(2026, 3, 31),
+            fingerprint="peer_fee_line_rare|none|" + str(bill.id) + "|fee|x",
+            severity="warning",
+            title="Peer",
+            summary="Peer",
+            evidence={},
+            review_status="open",
+        )
+        session = MagicMock()
+        session.scalars.return_value.all.return_value = [peer_row]
+        replace_anomalies_for_comparison(
+            session,
+            current=bill,
+            compared_to_bill_id=None,
+            findings=[
+                ComparisonFindingResponse(
+                    rule_id="no_prior_bill",
+                    severity="info",
+                    title="First bill",
+                    summary="Baseline",
+                    evidence={},
+                )
+            ],
+            rule_pack_version=RULE_PACK_VERSION,
+        )
+        session.delete.assert_not_called()
+        session.add.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

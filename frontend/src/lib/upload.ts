@@ -171,6 +171,14 @@ export interface DocumentComparisonResponse {
   compared_to_bill_id: string | null;
   compared_to_period_end: string | null;
   findings: ComparisonFindingResponse[];
+  peer_site_ids_used?: string[];
+}
+
+export interface PeerSitesConfigResponse {
+  document_id: string;
+  anchor_site_id: string | null;
+  saved_peer_site_ids: string[];
+  available_sites: { id: string; name: string }[];
 }
 
 /** §4 template narrative + confidence (from ``GET /api/v1/anomalies``). */
@@ -435,6 +443,41 @@ export async function fetchDocumentComparison(
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Bill comparison failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<DocumentComparisonResponse>;
+}
+
+/** Load org sites + saved peer picks for the cross-site checklist (§3c). */
+export async function fetchDocumentPeerSitesConfig(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+): Promise<PeerSitesConfigResponse> {
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill/peer-sites`, {
+    headers: tenantHeaders(orgId),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Peer sites config failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<PeerSitesConfigResponse>;
+}
+
+/** Run §3c peer comparison for selected sites (empty list = auto-discovery). */
+export async function postDocumentPeerComparison(
+  apiBase: string,
+  orgId: string,
+  documentId: string,
+  peerSiteIds: string[],
+): Promise<DocumentComparisonResponse> {
+  const res = await fetch(`${apiBase}/api/v1/documents/${documentId}/bill/peer-comparison`, {
+    method: "POST",
+    headers: { ...tenantHeaders(orgId), "Content-Type": "application/json" },
+    body: JSON.stringify({ peer_site_ids: peerSiteIds }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Peer comparison failed (${res.status}): ${body}`);
   }
   return res.json() as Promise<DocumentComparisonResponse>;
 }

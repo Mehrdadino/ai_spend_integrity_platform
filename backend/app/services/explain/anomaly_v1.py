@@ -74,6 +74,14 @@ def build_explainability_v1(
         return _extraction_quality_rule(rule_id, ev, summary=summary)
     if rule_id.startswith("utility_") or rule_id == "telecom_many_fees":
         return _domain_pack(rule_id, ev, summary=summary)
+    if rule_id == "peer_fee_line_rare":
+        return _peer_fee_line(ev, widespread=False, summary=summary)
+    if rule_id == "peer_fee_line_widespread":
+        return _peer_fee_line(ev, widespread=True, summary=summary)
+    if rule_id == "peer_usage_or_total_outlier":
+        return _peer_usage_outlier(ev, summary=summary)
+    if rule_id.startswith("not_comparable_") or rule_id.startswith("peer_comparable_"):
+        return _peer_info(rule_id, ev, summary=summary)
     return ExplainabilityV1(
         explanation=(
             f"This signal uses rule “{rule_id}”. The pipeline stored a short summary; "
@@ -398,4 +406,60 @@ def _credits_exceed(ev: Mapping[str, Any]) -> ExplainabilityV1:
         f"Credits on this bill total {credits} {cur} while other positive lines sum to {charges} {cur}. "
         "Confirm this is an adjustment or net-credit invoice rather than a mapping error."
     )
+    return ExplainabilityV1(explanation=explanation, confidence=tier, reasons=reasons)
+
+
+def _peer_fee_line(
+    ev: Mapping[str, Any],
+    *,
+    widespread: bool,
+    summary: str,
+) -> ExplainabilityV1:
+    fee_label = _get_str(ev, "fee_label", default="")
+    fp = fee_label or _get_str(ev, "fingerprint", default="fee line")
+    peers_with = _get_str(ev, "peers_with_fee", default="?")
+    peer_count = _get_str(ev, "peer_count", default="?")
+    tier, reasons = _tier_for_keys(("fingerprint", "peer_count", "peers_with_fee"), ev)
+    if widespread:
+        pct = _get_str(ev, "prevalence_pct", default="")
+        pct_part = f" ({pct}% of peers)" if pct else ""
+        explanation = (
+            f"Fee pattern “{fp}” appears on this bill and on {peers_with} of {peer_count} "
+            f"peer electric/utility accounts in the same billing window{pct_part}. "
+            "That usually indicates a utility-wide or portfolio-wide charge, not a single-store mistake."
+        )
+    else:
+        explanation = (
+            f"Fee pattern “{fp}” appears on this bill but on only {peers_with} of {peer_count} "
+            "peer accounts in the same billing window — worth checking whether this store was "
+            "charged incorrectly."
+        )
+    return ExplainabilityV1(explanation=explanation.strip(), confidence=tier, reasons=reasons)
+
+
+def _peer_usage_outlier(ev: Mapping[str, Any], *, summary: str) -> ExplainabilityV1:
+    metric = _get_str(ev, "metric", default="metric")
+    anchor = _get_str(ev, "anchor_value", default="?")
+    med = _get_str(ev, "peer_median", default="?")
+    unit = _get_str(ev, "unit", default="")
+    tier, reasons = _tier_for_keys(("metric", "anchor_value", "peer_median", "peer_count"), ev)
+    explanation = (
+        f"This site's {metric} ({anchor} {unit}) is high vs peer accounts "
+        f"(peer median {med} {unit}). {summary}"
+    )
+    return ExplainabilityV1(explanation=explanation.strip(), confidence=tier, reasons=reasons)
+
+
+def _peer_info(rule_id: str, ev: Mapping[str, Any], *, summary: str) -> ExplainabilityV1:
+    tier: ConfidenceLevel = "high"
+    reasons = ("Peer comparability gate or completion note from §3c rule pack.",)
+    if rule_id == "not_comparable_insufficient_peers":
+        n = _get_str(ev, "peer_site_count", default="0")
+        min_s = _get_str(ev, "min_peer_sites", default="3")
+        explanation = (
+            f"Cross-site benchmarks need bills from at least {min_s} other sites in the same "
+            f"service slice and month; only {n} qualified. {summary}"
+        )
+    else:
+        explanation = summary.strip()
     return ExplainabilityV1(explanation=explanation, confidence=tier, reasons=reasons)

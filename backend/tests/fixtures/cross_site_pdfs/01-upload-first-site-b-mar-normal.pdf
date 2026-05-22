@@ -1,0 +1,80 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]
+   /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >>
+   /Contents 6 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Length 1679 >>
+stream
+BT
+/F1 16 Tf 0.1 0.2 0.5 rg
+1 0 0 1 50 740 Tm (Pacific Electric Utilities) Tj
+/F2 9 Tf 0.35 0.35 0.35 rg
+1 0 0 1 50 718 Tm (Reliable Power for Every Customer Since 1952) Tj
+/F1 11 Tf 0 0 0 rg
+1 0 0 1 50 682 Tm (STATEMENT OF ACCOUNT) Tj
+/F2 9 Tf 0 0 0 rg
+1 0 0 1 50 654 Tm (Service address: Cross-Site Site B ? 1200 Harbor Ave) Tj
+1 0 0 1 50 640 Tm (Utility account ? electric service) Tj
+1 0 0 1 50 626 Tm (Billing period: 2026-03-01 ? 2026-03-31) Tj
+1 0 0 1 50 612 Tm (Issue date: 2026-04-05) Tj
+/F1 10 Tf 0 0 0 rg
+1 0 0 1 50 588 Tm (Description) Tj
+1 0 0 1 420 588 Tm (Amount \(USD\)) Tj
+/F2 9 Tf 0 0 0 rg
+1 0 0 1 50 570 Tm (Basic service charge) Tj
+1 0 0 1 420 570 Tm ($12.50) Tj
+1 0 0 1 50 556 Tm (Energy usage) Tj
+1 0 0 1 420 556 Tm ($98.40) Tj
+1 0 0 1 60 542 Tm (qty=820   unit=kwh) Tj
+1 0 0 1 50 530 Tm (Environmental levy) Tj
+1 0 0 1 420 530 Tm ($4.10) Tj
+1 0 0 1 50 516 Tm (State tax) Tj
+1 0 0 1 420 516 Tm ($6.32) Tj
+/F1 11 Tf 0 0 0 rg
+1 0 0 1 50 494 Tm (Total Amount Due) Tj
+1 0 0 1 420 494 Tm ($121.32) Tj
+/F2 7.5 Tf 0.6 0.6 0.6 rg
+1 0 0 1 50 454 Tm (BILL_SPEC_V1) Tj
+1 0 0 1 50 444 Tm (spend_domain: utility) Tj
+1 0 0 1 50 434 Tm (spend_kind: electricity) Tj
+1 0 0 1 50 424 Tm (issuer_name: Pacific Electric Utilities) Tj
+1 0 0 1 50 414 Tm (period_start: 2026-03-01) Tj
+1 0 0 1 50 404 Tm (period_end: 2026-03-31) Tj
+1 0 0 1 50 394 Tm (currency: USD) Tj
+1 0 0 1 50 384 Tm (line: Basic service charge | 12.50) Tj
+1 0 0 1 50 374 Tm (line: Energy usage | 98.40 | qty=820 | unit=kwh) Tj
+1 0 0 1 50 364 Tm (line: Environmental levy | 4.10) Tj
+1 0 0 1 50 354 Tm (line: State tax | 6.32) Tj
+1 0 0 1 50 344 Tm (header_total: 121.32) Tj
+1 0 0 1 50 334 Tm (END_BILL_SPEC) Tj
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000257 00000 n 
+0000000359 00000 n 
+0000000456 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+2187
+%%EOF

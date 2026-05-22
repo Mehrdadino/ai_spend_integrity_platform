@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from typing import Iterator, Optional
+from datetime import date
+from typing import Iterator, Optional, Sequence
 
 from sqlalchemy import Date, and_, cast, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.bill import Bill
 from app.models.document import Document
 from app.services.comparison.limits import DEFAULT_SITE_BILL_SCAN, MAX_SITE_BILL_SCAN
+from app.services.comparison.peer_config import MAX_PEER_CANDIDATES
 from app.services.comparison.period import effective_period_end
 
 
@@ -356,6 +358,47 @@ def get_prior_bills_for_bill(
         bill=bill,
         limit=limit,
     )
+
+
+def list_peer_bill_candidates_for_anchor(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    anchor: Bill,
+    window_start: date,
+    window_end: date,
+    max_candidates: int = MAX_PEER_CANDIDATES,
+    peer_site_ids: Sequence[uuid.UUID] | None = None,
+) -> list[Bill]:
+    """Bills in org + period window excluding anchor site (§3c SQL path; slice filter in Python).
+
+    Returns rows with ``line_items`` loaded, newest billing period first. Caller applies
+    ``peer_service_slice_key`` and one-bill-per-peer-site reduction.
+    """
+    if anchor.site_id is None:
+        return []
+    period_end = _bill_period_end_expr()
+    cap = max(1, min(max_candidates, MAX_PEER_CANDIDATES))
+    filters = [
+        Bill.organization_id == organization_id,
+        Bill.site_id.isnot(None),
+        Bill.site_id != anchor.site_id,
+        Bill.spend_domain == anchor.spend_domain,
+        Document.deleted_at.is_(None),
+        period_end >= window_start,
+        period_end <= window_end,
+    ]
+    if peer_site_ids:
+        filters.append(Bill.site_id.in_(tuple(peer_site_ids)))
+    stmt = (
+        select(Bill)
+        .join(Document, Document.id == Bill.document_id)
+        .where(*filters)
+        .order_by(period_end.desc(), Bill.created_at.desc(), Bill.id.desc())
+        .limit(cap)
+        .options(selectinload(Bill.line_items))
+    )
+    return list(session.scalars(stmt).all())
 
 
 def get_prior_bills_for_org_document(

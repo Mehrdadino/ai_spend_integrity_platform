@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.repositories.documents import list_extracted_document_ids_with_bills
 from app.services.comparison.evaluate import evaluate_document_comparison
+from app.services.comparison.evaluate_peer import evaluate_document_peer_comparison
 from app.services.comparison.limits import DEFAULT_SITE_BILL_SCAN
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ def materialize_comparisons_for_organization(
     site_id: Optional[uuid.UUID] = None,
     limit: int = DEFAULT_SITE_BILL_SCAN,
 ) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
-    """Run §3b/§3d for eligible documents; return ``(succeeded_ids, failed_ids)``."""
+    """Run §3b + §3c/§3d for eligible documents; return ``(succeeded_ids, failed_ids)``."""
     doc_ids = list_extracted_document_ids_with_bills(
         session,
         organization_id=organization_id,
@@ -40,6 +41,11 @@ def materialize_comparisons_for_organization(
     for doc_id in doc_ids:
         try:
             evaluate_document_comparison(
+                session,
+                organization_id=organization_id,
+                document_id=doc_id,
+            )
+            evaluate_document_peer_comparison(
                 session,
                 organization_id=organization_id,
                 document_id=doc_id,

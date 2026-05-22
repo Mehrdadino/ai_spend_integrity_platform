@@ -20,6 +20,15 @@ from app.schemas.comparison import ComparisonFindingResponse
 from app.services.comparison.period import effective_period_end
 
 
+def _rule_pack_family(rule_pack_version: str) -> str:
+    """Group versions so §3b site reruns do not delete §3c peer rows (and vice versa)."""
+    if rule_pack_version.startswith("comparison-peer"):
+        return "peer"
+    if rule_pack_version.startswith("comparison-v"):
+        return "site"
+    return rule_pack_version
+
+
 def replace_anomalies_for_comparison(
     session: Session,
     *,
@@ -39,7 +48,13 @@ def replace_anomalies_for_comparison(
     all_for_bill = list(
         session.scalars(select(Anomaly).where(Anomaly.bill_id == current.id)).all()
     )
-    stale_versions = [row for row in all_for_bill if row.rule_pack_version != rule_pack_version]
+    family = _rule_pack_family(rule_pack_version)
+    stale_versions = [
+        row
+        for row in all_for_bill
+        if row.rule_pack_version != rule_pack_version
+        and _rule_pack_family(row.rule_pack_version) == family
+    ]
     if stale_versions:
         for row in stale_versions:
             session.delete(row)
@@ -120,11 +135,12 @@ def _flatten_findings_into_rows(
             continue
 
         fp_prior = prior_id if finding.rule_id != "header_total_mismatch" else None
+        extra = _fingerprint_extra_for_finding(finding)
         fp = _base_fingerprint(
             finding.rule_id,
             current.id,
             compared_to=fp_prior,
-            extra=None,
+            extra=extra,
         )
         compared_col = prior_id if finding.rule_id == "mom_total_change" else None
         out.append(
@@ -256,6 +272,18 @@ def _single_fee_summary(entry: dict[str, Any]) -> str:
     if amt:
         return f"{label}: {amt} {cur}".strip()
     return str(label)
+
+
+def _fingerprint_extra_for_finding(finding: ComparisonFindingResponse) -> str | None:
+    """Disambiguate multiple §3c rows per bill (fee fingerprint, metric name)."""
+    ev = finding.evidence
+    if finding.rule_id in ("peer_fee_line_rare", "peer_fee_line_widespread"):
+        raw = ev.get("fingerprint")
+        return str(raw) if raw else None
+    if finding.rule_id == "peer_usage_or_total_outlier":
+        raw = ev.get("metric")
+        return str(raw) if raw else None
+    return None
 
 
 def _base_fingerprint(

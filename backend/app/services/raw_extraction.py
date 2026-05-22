@@ -26,6 +26,10 @@ from app.services.document_text import (
     extract_text_for_document,
 )
 from app.services.extraction_llm import safe_llm_generic_bill_dict
+from app.services.extraction_pdf_spec import (
+    parse_generic_bill_dict_from_pdf_text,
+    pdf_text_contains_bill_spec,
+)
 from app.services.extraction_validate import validate_raw_extraction_payload
 
 logger = logging.getLogger(__name__)
@@ -105,15 +109,29 @@ def persist_raw_extraction_for_document(
                 "Fix EXTRACTION_LLM_* settings and reprocess."
             )
     else:
-        if bill_text:
-            provenance["structured_via"] = "deterministic_stub"
+        spec_dict: dict[str, Any] | None = None
+        if bill_text and pdf_text_contains_bill_spec(bill_text):
+            spec_dict = parse_generic_bill_dict_from_pdf_text(
+                bill_text,
+                document_id=document.id,
+            )
+        if spec_dict is not None:
+            candidate = spec_dict
+            model_id = settings.raw_extraction_stub_model_id
+            provenance["structured_via"] = "pdf_embedded_spec"
             provenance["structured_note"] = (
-                "Set EXTRACTION_LLM_API_KEY to structure line items from extracted PDF text."
+                "Structured from BILL_SPEC_V1 block embedded in the test PDF."
             )
         else:
-            provenance["structured_via"] = "deterministic_stub"
-        candidate = build_deterministic_generic_bill_dict(document)
-        model_id = settings.raw_extraction_stub_model_id
+            if bill_text:
+                provenance["structured_via"] = "deterministic_stub"
+                provenance["structured_note"] = (
+                    "Set EXTRACTION_LLM_API_KEY to structure line items from extracted PDF text."
+                )
+            else:
+                provenance["structured_via"] = "deterministic_stub"
+            candidate = build_deterministic_generic_bill_dict(document)
+            model_id = settings.raw_extraction_stub_model_id
 
     raw_payload = validate_raw_extraction_payload(
         candidate,
