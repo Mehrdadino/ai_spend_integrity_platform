@@ -2075,6 +2075,49 @@ button.btn-danger:hover:not(:disabled) {
   font-weight: 700;
 }
 
+.team-status {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  line-height: 1.35;
+}
+
+.team-status--active {
+  color: var(--ok);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.team-status--invite_sent {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.team-status--awaiting_sign_in {
+  color: #fcd34d;
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.team-status--expired {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.team-status--deactivated {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.team-row--deactivated {
+  opacity: 0.72;
+}
+
+.team-directory-table select {
+  font-size: 0.82rem;
+  max-width: 10rem;
+}
+
 .team-list {
   margin: 0;
   padding: 0;

@@ -144,6 +144,20 @@ def require_org_manager(
     return ctx
 
 
+def require_org_member_for_path_org(
+    organization_id: Annotated[uuid.UUID, Path(description="Organization UUID")],
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+) -> tuple[Organization, User]:
+    """Resolve org from path; any org member (or platform admin) may read team directory."""
+    org = get_organization_by_id(db, organization_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if not user_can_access_organization(db, user, org):
+        raise HTTPException(status_code=403, detail="You do not have access to this organization")
+    return org, user
+
+
 def require_org_admin_for_path_org(
     organization_id: Annotated[uuid.UUID, Path(description="Organization UUID")],
     db: Session = Depends(get_db),

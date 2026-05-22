@@ -237,6 +237,52 @@ export async function changeEmail(
   return data;
 }
 
+export type OrganizationInvitePreview = {
+  email: string;
+  organization_id: string;
+  organization_name: string;
+  role: string;
+  account_exists: boolean;
+};
+
+export type ActivateInviteResponse = LoginResponse & {
+  organization_id: string;
+  organization_name: string;
+  role: string;
+  message: string;
+};
+
+export async function fetchInvitePreview(
+  apiBase: string,
+  inviteToken: string,
+): Promise<OrganizationInvitePreview> {
+  const params = new URLSearchParams({ invite_token: inviteToken });
+  const res = await fetch(apiUrl(apiBase, `/auth/invite-preview?${params}`));
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as OrganizationInvitePreview;
+}
+
+export async function activateInvite(
+  apiBase: string,
+  inviteToken: string,
+  password: string,
+  rememberDevice = true,
+): Promise<ActivateInviteResponse> {
+  const res = await fetch(apiUrl(apiBase, "/auth/activate-invite"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      invite_token: inviteToken,
+      password,
+      remember_device: rememberDevice,
+    }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as ActivateInviteResponse;
+  setSession(data);
+  return data;
+}
+
 export async function fetchMe(apiBase: string): Promise<AuthUser> {
   const res = await fetch(apiUrl(apiBase, "/auth/me"), {
     headers: authHeaders(),

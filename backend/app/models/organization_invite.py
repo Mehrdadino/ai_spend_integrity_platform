@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class OrganizationInvite(Base):
-    """Invite-by-email; accepted when the user redeems the token while signed in."""
+    """Invite-by-email; new users activate via set-password; existing users sign in and accept."""
 
     __tablename__ = "organization_invites"
 

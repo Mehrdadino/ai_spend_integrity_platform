@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_current_user
@@ -33,8 +33,11 @@ from app.schemas.auth import (
 from app.schemas.organization_team import (
     AcceptOrganizationInviteRequest,
     AcceptOrganizationInviteResponse,
+    ActivateOrganizationInviteRequest,
+    ActivateOrganizationInviteResponse,
+    OrganizationInvitePreviewResponse,
 )
-from app.services.organization_invites import InviteError, accept_invite
+from app.services.organization_invites import InviteError, accept_invite, activate_invite, preview_invite
 from app.services.auth import (
     ChallengeError,
     complete_password_reset,
@@ -278,6 +281,67 @@ def post_change_email(
     db.commit()
     db.refresh(user)
     return _login_response_for_user(user, remember_device=True)
+
+
+@router.get(
+    "/invite-preview",
+    response_model=OrganizationInvitePreviewResponse,
+    dependencies=[Depends(rate_limit_auth_ip("invite_preview"))],
+)
+def get_invite_preview(
+    invite_token: str = Query(min_length=16, max_length=256),
+    db: Session = Depends(get_db),
+) -> OrganizationInvitePreviewResponse:
+    """Public metadata for an invite link (new user vs existing account)."""
+    try:
+        preview = preview_invite(db, token=invite_token)
+    except InviteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return OrganizationInvitePreviewResponse(
+        email=preview.email,
+        organization_id=preview.organization_id,
+        organization_name=preview.organization_name,
+        role=preview.role,
+        account_exists=preview.account_exists,
+    )
+
+
+@router.post(
+    "/activate-invite",
+    response_model=ActivateOrganizationInviteResponse,
+    dependencies=[Depends(rate_limit_auth_ip("activate_invite"))],
+)
+def post_activate_invite(
+    body: ActivateOrganizationInviteRequest,
+    db: Session = Depends(get_db),
+) -> ActivateOrganizationInviteResponse:
+    """Create account + org membership from invite token (B2B activation flow)."""
+    try:
+        user, invite = activate_invite(db, token=body.invite_token, password=body.password)
+        db.commit()
+        db.refresh(user)
+    except InviteError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    org = invite.organization
+    org_name = org.name if org is not None else "the organization"
+    return ActivateOrganizationInviteResponse(
+        access_token=create_access_token(
+            user_id=user.id,
+            role=user.role,
+            email=user.email,
+            remember_device=body.remember_device,
+        ),
+        user=UserResponse.model_validate(user),
+        organization_id=invite.organization_id,
+        organization_name=org_name,
+        role=invite.role,
+        message=f"Welcome — you joined {org_name}.",
+    )
 
 
 @router.post(

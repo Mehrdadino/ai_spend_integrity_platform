@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.organization import Organization
 from app.models.organization_member import OrgMemberRole
 from app.models.user import PlatformRole, User
-from app.repositories.organization_members import get_membership
+from app.repositories.organization_members import get_active_membership
 
 
 def is_platform_admin(user: User) -> bool:
@@ -27,7 +27,7 @@ def get_org_role_for_user(
     """Return per-org role string, or None if not a member (platform admins return org_admin)."""
     if is_platform_admin(user):
         return OrgMemberRole.ORG_ADMIN.value
-    membership = get_membership(session, organization_id=organization_id, user_id=user.id)
+    membership = get_active_membership(session, organization_id=organization_id, user_id=user.id)
     return membership.role if membership else None
 
 

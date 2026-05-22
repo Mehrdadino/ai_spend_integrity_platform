@@ -3,7 +3,7 @@
  * Layout: split-screen with branded panel on left, form on right.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PasswordPolicyHints } from "./components/PasswordPolicyHints";
 import { isPasswordAcceptable } from "./lib/passwordPolicy";
 import {
@@ -11,26 +11,51 @@ import {
   loginChallengeCompletesSession,
   loginStart,
   loginVerifyOtp,
+  activateInvite,
+  fetchInvitePreview,
   register,
   resetPassword,
   getRememberDevicePreference,
   setRememberDevicePreference,
   setSession,
   type AuthUser,
+  type OrganizationInvitePreview,
 } from "./lib/auth";
 
 const defaultApiBase = "http://127.0.0.1:8000";
 
-type AuthView = "sign-in" | "create-account" | "verify-2fa" | "forgot-password" | "reset-password";
+type AuthView =
+  | "sign-in"
+  | "create-account"
+  | "verify-2fa"
+  | "forgot-password"
+  | "reset-password"
+  | "accept-invite";
+
+export type SignedInContext = {
+  organizationId?: string;
+};
 
 type LoginPageProps = {
   initialApiBase?: string;
   resetToken?: string | null;
-  onSignedIn: (user: AuthUser, apiBase: string) => void;
+  inviteToken?: string | null;
+  onSignedIn: (user: AuthUser, apiBase: string, ctx?: SignedInContext) => void;
 };
 
-export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageProps) {
-  const initialView: AuthView = resetToken?.trim() ? "reset-password" : "sign-in";
+function clearInviteTokenFromUrl(): void {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("invite_token")) return;
+  url.searchParams.delete("invite_token");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+}
+
+export function LoginPage({ initialApiBase, resetToken, inviteToken, onSignedIn }: LoginPageProps) {
+  const initialView: AuthView = resetToken?.trim()
+    ? "reset-password"
+    : inviteToken?.trim()
+      ? "accept-invite"
+      : "sign-in";
   const [view, setView] = useState<AuthView>(initialView);
   const [apiBase, setApiBase] = useState(initialApiBase?.trim() || defaultApiBase);
   const [email, setEmail] = useState("");
@@ -43,6 +68,43 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [invitePreview, setInvitePreview] = useState<OrganizationInvitePreview | null>(null);
+  const [invitePreviewLoading, setInvitePreviewLoading] = useState(Boolean(inviteToken?.trim()));
+
+  useEffect(() => {
+    const token = inviteToken?.trim();
+    if (!token || !apiBase.trim()) {
+      setInvitePreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setInvitePreviewLoading(true);
+    setError(null);
+    void (async () => {
+      try {
+        const preview = await fetchInvitePreview(apiBase.trim(), token);
+        if (cancelled) return;
+        setInvitePreview(preview);
+        setEmail(preview.email);
+        if (preview.account_exists) {
+          setView("sign-in");
+          setInfo(`Sign in to join ${preview.organization_name}.`);
+        } else {
+          setView("accept-invite");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+          setView("sign-in");
+        }
+      } finally {
+        if (!cancelled) setInvitePreviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken, apiBase]);
 
   const title = useMemo(() => {
     switch (view) {
@@ -50,9 +112,11 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
       case "verify-2fa":       return "Verify your email";
       case "forgot-password":  return "Forgot password";
       case "reset-password":   return "Reset password";
+      case "accept-invite":
+        return invitePreview ? `Join ${invitePreview.organization_name}` : "Accept invite";
       default:                 return "Sign in";
     }
-  }, [view]);
+  }, [view, invitePreview]);
 
   function switchView(next: AuthView) {
     setView(next);
@@ -116,7 +180,7 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
 
           {/* ── Form fields ── */}
           <section className="card login-card" style={{ marginTop: 0 }}>
-            {view !== "verify-2fa" && view !== "reset-password" ? (
+            {view !== "verify-2fa" && view !== "reset-password" && view !== "accept-invite" ? (
               <label className="field">
                 <span>API base URL</span>
                 <input
@@ -129,6 +193,18 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
               </label>
             ) : null}
 
+            {view === "accept-invite" && invitePreviewLoading ? (
+              <p className="hint">Loading invite…</p>
+            ) : null}
+
+            {view === "accept-invite" && invitePreview && !invitePreviewLoading ? (
+              <p className="hint" style={{ marginTop: 0, marginBottom: "0.75rem" }}>
+                You have been invited to <strong>{invitePreview.organization_name}</strong> as{" "}
+                <strong>{invitePreview.role}</strong>. Set a password for{" "}
+                <strong>{invitePreview.email}</strong> to create your account.
+              </p>
+            ) : null}
+
             {view === "sign-in" || view === "create-account" || view === "forgot-password" ? (
               <label className="field">
                 <span>Email</span>
@@ -138,24 +214,38 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="username"
                   placeholder="you@company.com"
+                  readOnly={Boolean(inviteToken?.trim() && invitePreview?.email)}
                 />
               </label>
             ) : null}
 
-            {view === "sign-in" || view === "create-account" || view === "reset-password" ? (
+            {view === "sign-in" ||
+            view === "create-account" ||
+            view === "reset-password" ||
+            view === "accept-invite" ? (
               <label className="field">
-                <span>{view === "reset-password" ? "New password" : "Password"}</span>
+                <span>
+                  {view === "reset-password" || view === "accept-invite" ? "Password" : "Password"}
+                </span>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  autoComplete={view === "reset-password" ? "new-password" : "current-password"}
-                  placeholder={view === "reset-password" ? "New password" : "••••••••"}
+                  autoComplete={
+                    view === "reset-password" || view === "accept-invite"
+                      ? "new-password"
+                      : "current-password"
+                  }
+                  placeholder={
+                    view === "reset-password" || view === "accept-invite"
+                      ? "Choose a password"
+                      : "••••••••"
+                  }
                 />
               </label>
             ) : null}
 
-            {view === "create-account" || view === "reset-password" ? (
+            {view === "create-account" || view === "reset-password" || view === "accept-invite" ? (
               <label className="field">
                 <span>Confirm password</span>
                 <input
@@ -168,7 +258,7 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
               </label>
             ) : null}
 
-            {view === "create-account" || view === "reset-password" ? (
+            {view === "create-account" || view === "reset-password" || view === "accept-invite" ? (
               <PasswordPolicyHints password={password} />
             ) : null}
 
@@ -266,9 +356,71 @@ export function LoginPage({ initialApiBase, resetToken, onSignedIn }: LoginPageP
                     Create account
                   </button>
                 </p>
-                <p className="hint" style={{ marginTop: "0.75rem", textAlign: "center" }}>
-                  Production tenants usually join via an email invite from an org admin.
-                </p>
+                {invitePreview ? (
+                  <p className="hint" style={{ marginTop: "0.75rem", textAlign: "center" }}>
+                    Invited to <strong>{invitePreview.organization_name}</strong>. Use the email that
+                    received the invite.
+                  </p>
+                ) : (
+                  <p className="hint" style={{ marginTop: "0.75rem", textAlign: "center" }}>
+                    Production tenants usually join via an email invite from an org admin.
+                  </p>
+                )}
+              </>
+            ) : null}
+
+            {/* ── Accept invite (new account) ── */}
+            {view === "accept-invite" ? (
+              <>
+                <label className="field field--checkbox" style={{ marginBottom: "1rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={rememberDevice}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setRememberDevice(checked);
+                      setRememberDevicePreference(checked);
+                    }}
+                  />
+                  <span style={{ textTransform: "none", letterSpacing: 0 }}>Remember this device for 30 days</span>
+                </label>
+                <button
+                  type="button"
+                  style={{ width: "100%" }}
+                  disabled={
+                    invitePreviewLoading ||
+                    busy ||
+                    !apiBase.trim() ||
+                    !inviteToken?.trim() ||
+                    !password ||
+                    password !== passwordConfirm ||
+                    !isPasswordAcceptable(password)
+                  }
+                  onClick={() =>
+                    void runAction(async () => {
+                      if (password !== passwordConfirm) {
+                        setError("Passwords do not match");
+                        return;
+                      }
+                      if (!isPasswordAcceptable(password)) {
+                        setError("Password does not meet the requirements below.");
+                        return;
+                      }
+                      const res = await activateInvite(
+                        apiBase.trim(),
+                        inviteToken!.trim(),
+                        password,
+                        rememberDevice,
+                      );
+                      clearInviteTokenFromUrl();
+                      onSignedIn(res.user, apiBase.trim(), {
+                        organizationId: res.organization_id,
+                      });
+                    })
+                  }
+                >
+                  {busy ? "Joining…" : "Set password and join"}
+                </button>
               </>
             ) : null}
 

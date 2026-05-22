@@ -20,7 +20,7 @@ Just:
 
 ---
 
-## Implementation status (repository) — 2026-05-21
+## Implementation status (repository) — 2026-05-21 (invite activation)
 
 **Why this section:** align the product roadmap with what is already built so future work starts from the correct checkpoint.
 
@@ -32,7 +32,7 @@ Just:
 - **Background pipeline:** RQ worker loads PDF bytes from S3, extracts **embedded text** (`pypdf`), falls back to **Tesseract OCR** for scan-only PDFs / image MIME types, optionally structures via **LLM** when `EXTRACTION_LLM_API_KEY` is set, validates **`generic-bill-v1`** (**2b**), persists **`document_raw_extractions`** (**2a**), normalizes to **`bills` / `bill_line_items`** (**2c–2d**).
 - **Without LLM key:** deterministic sample line items still run for dev/CI; bill summary notes that PDF text was extracted but structuring needs an API key.
 - **Auth (P1/P3):** **Login UI** + JWT (**remember this device** = 30 days, else ~12h session); email 2FA when **`SMTP_HOST`** is set; **Account** tab; **forgot/reset password**; password policy; **invite-only registration** in production (`AUTH_ALLOW_REGISTRATION=false`, open in dev via **`dev.sh`**). **`dev.sh`** points SMTP at **Mailpit** so invites and OTPs are delivered locally (inbox **:8025**), not only logged on the API.
-- **Org teams (B2B):** **`organization_members`** with per-org roles **`org_admin`** | **`member`** | **`viewer`**; email **invites** (SMTP or Mailpit) + **`POST /auth/accept-invite`**; **Team** panel on Organizations (org admin); viewers read-only; members upload/review; org admins manage sites (Sites tab) / team / delete.
+- **Org teams (B2B):** **`organization_members`** with per-org roles **`org_admin`** | **`member`** | **`viewer`**; **soft deactivate** (**`POST …/members/{id}/deactivate`**, migration **019**, shows **Deactivated by**); email **invites** (expire after **7 days** → status **Invite expired**); **invite activation**; **Team** table (**`GET …/team`**) for all members (Joined / Invited / Expires columns); org admins invite, roles, deactivate (including other admins if one admin remains); viewers read-only; members upload/review.
 - **Platform admin** still sees all orgs; dev **`X-Organization-Id`** when `AUTH_ALLOW_DEV_ORG_HEADER=true`.
 - **Production hardening:** Redis **rate limits** (e.g. **3/15min** per email on forgot/register/invite, **5/15min** login, **10/min** per IP); **lockout** after **5** failed sign-ins; security headers; production startup validation.
 - **§3a prior bills:** `get_prior_bills_for_bill` + **`GET …/bill/prior-bills`** (same org, same `site_id`; period ordering); prior-bill table in document viewer.
@@ -46,7 +46,7 @@ Just:
 ### Still to build for Phase 1 MVP
 
 - **Auth / org (deferred):** SSO (OIDC/SAML), email verification on signup/change-email, revoke-all-sessions, auth audit log, TOTP app 2FA, per-org domain allowlist, seat billing.
-- **Real outbound email (deferred):** Today local dev uses **Mailpit** only (invites/OTP/reset appear at **:8025**, not Gmail). Later: wire a transactional provider (**Resend**, **SendGrid**, **SES**, etc.) via existing **`SMTP_*`** env vars so org invites and auth mail reach real inboxes; verify **`SMTP_FROM_EMAIL`**; optional **`dev.sh`** toggle so Mailpit stays default but **`.env`** can override for one-off real-inbox tests (no separate prod deploy required).
+- **Real outbound email (deferred):** Today local dev uses **Mailpit** only (invites/OTP/reset appear at **:8025**, not Gmail). Later: wire a transactional provider (**Resend**, **SendGrid**, **SES**, etc.) via existing **`SMTP_*`** env vars so org invites and auth mail reach real inboxes; verify **`SMTP_FROM_EMAIL`**; optional **`dev.sh`** toggle so Mailpit stays default but **`.env`** can override for one-off real-inbox tests (no separate prod deploy required). Invite **activation UI** is shipped; delivery to real inboxes still depends on this SMTP work.
 - **§3c** site-to-site comparables (cross-location; not started).
 - **Real-bill pilot** — production LLM structuring quality on real PDFs; extend labeled golden set from pilot disputes.
 - **P2** — worker retries and upload idempotency hardening.

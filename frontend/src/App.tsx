@@ -1386,6 +1386,10 @@ export function App() {
       isUuid(effectiveOrgId) &&
       (platformAdmin || isOrgAdminRole(activeOrgRole)),
   );
+  /** Any org member (or platform admin) can view the team roster on Organizations. */
+  const canViewTeamRoster = Boolean(
+    authUser && effectiveOrgId && isUuid(effectiveOrgId) && (platformAdmin || activeOrgRole),
+  );
   /** Member or org admin may upload and review (not viewers). */
   const canWriteActiveOrg = Boolean(
     authUser &&
@@ -2316,6 +2320,10 @@ export function App() {
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("reset_token")
       : null;
+  const inviteTokenFromUrl =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("invite_token")
+      : null;
 
   useEffect(() => {
     if (!authUser || !apiBase.trim()) return;
@@ -2344,9 +2352,11 @@ export function App() {
       <LoginPage
         initialApiBase={apiBase}
         resetToken={resetTokenFromUrl}
-        onSignedIn={(user, base) => {
+        inviteToken={inviteTokenFromUrl}
+        onSignedIn={(user, base, ctx) => {
           setAuthUser(user);
           setApiBase(base);
+          if (ctx?.organizationId) setOrgId(ctx.organizationId);
         }}
       />
     );
@@ -3104,12 +3114,15 @@ export function App() {
             ) : null}
           </section>
 
-          {effectiveOrgId && isUuid(effectiveOrgId) && canManageActiveOrg ? (
+          {canViewTeamRoster ? (
             <OrganizationTeamPanel
               apiBase={apiBase}
               organizationId={effectiveOrgId}
               organizationName={orgRows.find((o) => o.id === effectiveOrgId)?.name ?? "Organization"}
+              canManage={canManageActiveOrg}
             />
+          ) : effectiveOrgId && isUuid(effectiveOrgId) ? (
+            <p className="hint">Select an organization you belong to in the sidebar to view the team roster.</p>
           ) : null}
         </>
       )}

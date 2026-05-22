@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import DateTime, ForeignKey, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class OrganizationMember(Base):
-    """A user belonging to an organization (team access)."""
+    """A user belonging to an organization (team access; soft-deactivate via ``deactivated_at``)."""
 
     __tablename__ = "organization_members"
 
@@ -46,6 +46,12 @@ class OrganizationMember(Base):
     )
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    deactivated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deactivated_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     organization: Mapped["Organization"] = relationship(
         "Organization",
@@ -54,4 +60,9 @@ class OrganizationMember(Base):
     user: Mapped["User"] = relationship(
         "User",
         back_populates="organization_memberships",
+        foreign_keys=[user_id],
+    )
+    deactivated_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[deactivated_by_user_id],
     )

@@ -26,6 +26,22 @@ export type AcceptInviteResponse = {
   message: string;
 };
 
+/** Unified team directory row (member or open invite). */
+export type OrganizationTeamRosterRow = {
+  row_type: "member" | "invite";
+  email: string;
+  role: string;
+  status: string;
+  status_label: string;
+  user_id: string | null;
+  invite_id: string | null;
+  joined_at: string | null;
+  invited_at: string | null;
+  expires_at: string | null;
+  deactivated_at: string | null;
+  deactivated_by_email: string | null;
+};
+
 function orgUrl(apiBase: string, orgId: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}/api/v1/organizations/${orgId}${path}`;
 }
@@ -39,6 +55,17 @@ async function parseError(res: Response): Promise<string> {
     /* raw */
   }
   return text || `Request failed (${res.status})`;
+}
+
+export async function fetchOrganizationTeam(
+  apiBase: string,
+  organizationId: string,
+): Promise<OrganizationTeamRosterRow[]> {
+  const res = await fetch(orgUrl(apiBase, organizationId, "/team"), {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as OrganizationTeamRosterRow[];
 }
 
 export async function fetchOrganizationMembers(
@@ -93,16 +120,17 @@ export async function updateOrganizationMemberRole(
   return (await res.json()) as OrganizationMemberResponse;
 }
 
-export async function removeOrganizationMember(
+export async function deactivateOrganizationMember(
   apiBase: string,
   organizationId: string,
   userId: string,
-): Promise<void> {
-  const res = await fetch(orgUrl(apiBase, organizationId, `/members/${userId}`), {
-    method: "DELETE",
+): Promise<OrganizationMemberResponse> {
+  const res = await fetch(orgUrl(apiBase, organizationId, `/members/${userId}/deactivate`), {
+    method: "POST",
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as OrganizationMemberResponse;
 }
 
 export async function acceptOrganizationInvite(

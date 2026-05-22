@@ -23,28 +23,28 @@ class TestOrgAccess(unittest.TestCase):
     def _org(self) -> Organization:
         return Organization(id=uuid.uuid4(), name="Acme", slug="acme", created_by_user_id=uuid.uuid4())
 
-    @patch("app.services.auth.access.get_membership")
-    def test_member_can_access(self, get_membership: MagicMock) -> None:
+    @patch("app.services.auth.access.get_active_membership")
+    def test_member_can_access(self, get_active_membership: MagicMock) -> None:
         session = MagicMock()
         user = self._user()
         org = self._org()
-        get_membership.return_value = MagicMock(role=OrgMemberRole.MEMBER.value)
+        get_active_membership.return_value = MagicMock(role=OrgMemberRole.MEMBER.value)
         self.assertTrue(user_can_access_organization(session, user, org))
 
-    @patch("app.services.auth.access.get_membership")
-    def test_viewer_cannot_write(self, get_membership: MagicMock) -> None:
+    @patch("app.services.auth.access.get_active_membership")
+    def test_viewer_cannot_write(self, get_active_membership: MagicMock) -> None:
         session = MagicMock()
         user = self._user()
         org = self._org()
-        get_membership.return_value = MagicMock(role=OrgMemberRole.VIEWER.value)
+        get_active_membership.return_value = MagicMock(role=OrgMemberRole.VIEWER.value)
         self.assertFalse(user_can_write_organization(session, user, org))
 
-    @patch("app.services.auth.access.get_membership")
-    def test_org_admin_can_manage(self, get_membership: MagicMock) -> None:
+    @patch("app.services.auth.access.get_active_membership")
+    def test_org_admin_can_manage(self, get_active_membership: MagicMock) -> None:
         session = MagicMock()
         user = self._user()
         org = self._org()
-        get_membership.return_value = MagicMock(role=OrgMemberRole.ORG_ADMIN.value)
+        get_active_membership.return_value = MagicMock(role=OrgMemberRole.ORG_ADMIN.value)
         self.assertTrue(user_can_manage_organization(session, user, org))
 
 

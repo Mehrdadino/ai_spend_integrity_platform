@@ -32,6 +32,23 @@ def list_pending_invites_for_organization(
     return list(rows)
 
 
+def list_open_invites_for_organization(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+) -> list[OrganizationInvite]:
+    """Unaccepted invites (pending or expired) for team directory status."""
+    rows = session.scalars(
+        select(OrganizationInvite)
+        .where(
+            OrganizationInvite.organization_id == organization_id,
+            OrganizationInvite.accepted_at.is_(None),
+        )
+        .order_by(OrganizationInvite.created_at.desc())
+    ).all()
+    return list(rows)
+
+
 def find_pending_invite_by_token(
     session: Session,
     *,

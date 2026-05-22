@@ -10,7 +10,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 
 ## 0.0 Implementation status (repository)
 
-**Last updated:** 2026-05-21 (Mailpit dev capture; real SMTP provider wiring deferred)  
+**Last updated:** 2026-05-21 (invite activation flow; Mailpit dev capture; real SMTP deferred)  
 **Purpose:** checkpoint so later work continues from the right place (see also [`product_roadmap.md`](product_roadmap.md) implementation section).
 
 ### Shipped in this repo
@@ -31,7 +31,7 @@ This document is the engineering counterpart to the product vision. **Product Ph
 | **3b** | Rule pack **v1.3** (`comparison-v1.3`): `rule_pack_v1.py`, `single_bill_integrity.py`, `extraction_quality.py`, `domain_packs.py` (MoM, new fees — **only when both current and prior have `period_start`/`period_end`**; else `period_comparison_skipped`; header mismatch, duplicate lines, fee/tax share, penalty fees, period/credit, extraction provenance, utility/telecom packs); labeled harness ``tests/comparison_labeled_cases.py``; **`GET …/bill/comparison`**; UI **Comparison insights**. |
 | **3d** | Migration **`008_anomalies`**; **`GET /api/v1/anomalies`** (+ **`GET …/anomalies/{id}`** §4d); replace-on-compare persistence in ``evaluate_document_comparison``; **Anomalies** UI tab. New anomalies default **`review_status=open`** (**009**). |
 | **3e** | **Shipped:** RQ backfill after worker upsert runs **bounded site-wide** comparison when the bill has a ``site_id``; **PATCH …/site** + **DELETE** queue site refresh (old site on move/delete); **010** index ``ix_bills_org_site_period_sort``; ``list_document_ids_newest_through_anchor`` adds immediate-older neighbor for targeted repair; keyset pages + ``SITE_BILL_REFRESH_MAX_BILLS``. |
-| **P1** | **Shipped:** auth + **Account**; migration **015**; **016** ``organization_members`` + ``organization_invites``; per-org ``org_admin``/``member``/``viewer``; team API + UI; ``POST /auth/accept-invite``; ``require_org_writer`` / ``require_org_manager``. |
+| **P1** | **Shipped:** auth + **Account**; migration **015**; **016** ``organization_members`` + ``organization_invites``; per-org ``org_admin``/``member``/``viewer``; ``GET /organizations/{id}/team`` roster (all members); invite **activation** + ``LoginPage``; org-admin invite/role controls; ``require_org_writer`` / ``require_org_manager``. |
 | **P1-security** | **Shipped:** Redis rate limits (IP + email buckets), login lockout, security headers middleware, ``APP_ENV=production`` startup validation. |
 | **P1-deferred** | SSO, email verify, session revoke, auth audit, TOTP, domain allowlist; **real SMTP** (transactional provider + verified from-address; optional Mailpit override in **`dev.sh`**) — see product roadmap. |
 | **P3** | **Shipped:** ``users.role`` admin/member; ``require_admin`` on document delete, site create, ``POST …/materialize-comparisons``; review audit ``actor_user_id`` from JWT. |
