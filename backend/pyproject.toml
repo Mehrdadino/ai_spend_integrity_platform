@@ -2,6 +2,7 @@
 name = "spend-integrity-api"
 version = "0.1.0"
 description = "AI Spend Integrity Platform — API (Phase 1)"
+license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [
     "alembic>=1.14.0",

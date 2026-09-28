@@ -1,66 +1,55 @@
-# Bill extraction & comparison — UI guide
+# Using the web app
 
-Everything below is done in the **web app** (`./scripts/dev.sh` → open http://127.0.0.1:5173). No `curl` or CLI required.
+Day-to-day flow after the stack is running. Install and sign-in defaults are in the [README](README.md).
 
----
+Open **http://127.0.0.1:5173**. Sign in (local seed user: `admin@dev.local` / `Dev-Admin-Change1!`). Login codes, invites, and password-reset mail show up in Mailpit at **http://127.0.0.1:8025**.
 
-## Concepts (30 seconds)
+## Concepts
 
 | Term | Meaning |
-|------|---------|
-| **Organization** | Your tenant (who owns data). Set once under **Connection**. |
-| **Site** | A **location** under that org (e.g. “Seattle store”). **Not** the org UUID and **not** parsed from the PDF. |
-| **Bill** | Normalized line items after the worker runs. |
-| **Prior bills** | Older bills for the **same site** — used for month-over-month comparison (§3a). |
-
----
+| --- | --- |
+| **Organization** | Tenant that owns the data. Pick one in the sidebar. |
+| **Site** | A location under that organization (for example “Seattle store”). It is not read from the PDF. |
+| **Bill** | Normalized line items after the worker finishes. |
+| **Prior bills** | Older bills for the **same site**, used for month-over-month comparison. |
 
 ## One-time setup
 
-1. Start the stack: `./scripts/dev.sh` (from repo root).
-2. Open **http://127.0.0.1:5173**.
-3. **Organizations** tab → create or pick your org → click **Use in Connection** (fills Organization ID).
-4. **Connection** (on any tab, top card):
-   - Confirm **API base URL** is `http://127.0.0.1:8000`.
-   - Under **Site (location)**:
-     - Enter a name (e.g. `Seattle`) → **Create site**.
-     - In **Site for uploads**, select **Seattle**.
-5. Leave this org and site selected while you upload all Seattle months.
+1. Start the stack from the repo root: `./scripts/dev.sh`.
+2. Sign in.
+3. In the sidebar **Organization** list, select **Dev Organization** (seeded on first run). You can create more on the **Organizations** tab.
+4. Open **Sites**, enter a name (for example `Seattle`), and click **Create site**.
+5. In the sidebar **Site (location)** list, select that site.
+6. Keep that organization and site selected while you upload that location’s bills.
 
----
+The API base URL defaults to `http://127.0.0.1:8000` on the sign-in screen. You only change it if the API is not on that address.
 
 ## Upload each month’s bill
 
-1. **Upload** tab.
-2. Confirm **Connection** still has your org + **Seattle** (or your site) selected.
-3. Choose the PDF → **Upload**.
-4. Wait until status is **extracted** (use **Documents** tab; the viewer auto-refreshes).
+1. Open **Upload**.
+2. Confirm the sidebar still has your organization and site.
+3. Choose one or more PDFs (up to 10) and click **Upload**.
+4. Open **Documents** and wait until status is **extracted**. The list refreshes while the worker runs.
 
-Repeat for every month. **Use the same organization and the same site** every time.
+Use the same organization and the same site for every month you want compared together.
 
----
+## Fix bills uploaded before a site existed
 
-## Fix bills you uploaded *before* sites existed
+1. **Documents** → open the bill.
+2. Set **Site** and save.
+3. Repeat for each document that has no site.
 
-1. **Documents** tab → click a Seattle bill row.
-2. In the viewer, find **Site**:
-   - Choose **Seattle** in the dropdown.
-   - Click **Save site**.
-3. Repeat for each old Seattle document that shows **Site** as “—”.
+After two or more extracted bills share that site, the viewer shows **Prior bills (same site)**.
 
-After two or more Seattle bills share the site and are **extracted**, scroll down in the viewer to **Prior bills (same site)**.
+## OCR vs LLM
 
----
+| Step | Needs an API key? |
+| --- | --- |
+| PDF or scan → text (`pypdf` / Tesseract) | No. Scans also need Tesseract and Poppler installed. |
+| Text → line items (LLM) | Yes. Set `EXTRACTION_LLM_*` in `backend/.env`, then restart `./scripts/dev.sh`. |
+| Normalized bill in the UI | Always. Without a key, line items are sample data. |
 
-## OCR vs LLM (why line items look “sample” or real)
-
-| Step | Needs API key? |
-|------|----------------|
-| PDF / scan → text (pypdf / Tesseract) | **No** |
-| Text → your line items (LLM) | **Yes** — `EXTRACTION_LLM_*` in `backend/.env`, restart `dev.sh` |
-| Normalized bill in the UI | Always (may be sample lines without LLM) |
-
-**Gemini (in `backend/.env`, then restart `dev.sh`):**
+Example for Gemini, in `backend/.env` only (this file is gitignored):
 
 ```bash
 EXTRACTION_LLM_API_KEY=your-key
@@ -70,26 +59,21 @@ EXTRACTION_LLM_MODEL=gemini-2.5-flash
 
 Then **Reprocess** the document in the viewer.
 
----
-
-## Pipeline diagram
+## Pipeline
 
 ```text
-PDF/image  →  [pypdf / Tesseract]  →  plain text        (no LLM)
-plain text →  [LLM or stub]        →  JSON line items   (LLM for real data)
-JSON       →  [normalization]      →  bills in UI       (no LLM)
-same site  →  [prior bills]       →  history table     (§3a, in viewer)
+PDF/image  →  pypdf or Tesseract  →  plain text
+plain text →  LLM or sample stub  →  JSON line items
+JSON       →  normalization       →  bills in the UI
+same site  →  prior bills         →  history and anomalies
 ```
 
----
-
-## Troubleshooting in the UI
+## Troubleshooting
 
 | Symptom | What to do |
-|---------|------------|
-| **Prior bills** empty | Need **2+** extracted bills on the **same site**; assign site on old uploads. |
-| **Site** dropdown empty | **Create site** under Connection → **Refresh sites**. |
-| Sample line items (“Electricity delivery (sample)”) | Set LLM env vars, restart dev stack, **Reprocess**. |
-| Red **LLM structuring error** | Fix model name / key in `.env` (use `gemini-2.5-flash`, not deprecated `2.0-flash`). |
-
-**Cursor** does not replace `EXTRACTION_LLM_API_KEY` — use Google AI Studio or another provider.
+| --- | --- |
+| **Prior bills** empty | Need **2+** extracted bills on the **same site**. Assign a site on older uploads. |
+| Site list empty | Create one on **Sites**, then pick it in the sidebar. |
+| Sample line items (“Electricity delivery (sample)”) | Set the LLM variables, restart the dev stack, **Reprocess**. |
+| Red **LLM structuring error** | Check the model name and key in `backend/.env`. Use a current model such as `gemini-2.5-flash`. |
+| No invite or reset email | Open Mailpit at http://127.0.0.1:8025. `dev.sh` sends mail there, not to a real inbox. |

@@ -2,6 +2,8 @@
   "name": "spend-integrity-web",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
+  "description": "Spend Integrity web app — upload utility bills and review anomalies.",
   "type": "module",
   "scripts": {
     "dev": "vite",

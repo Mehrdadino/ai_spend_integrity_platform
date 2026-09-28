@@ -1,4 +1,8 @@
+# Local secrets. Copy the *.env.example files; never commit real keys.
 .env
+.env.*
+!.env.example
+
 .venv/
 __pycache__/
 *.py[cod]
@@ -11,3 +15,16 @@ dist/
 htmlcov/
 node_modules/
 frontend/dist/
+
+# OS / editor junk
+.DS_Store
+
+# Private key material and credential dumps
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
